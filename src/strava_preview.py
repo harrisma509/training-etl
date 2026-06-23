@@ -245,7 +245,7 @@ def main():
             json.dump(output, f, indent=2)
         print(f"Preview written: {output_path}")
 
-    print("Strava preview complete")
+    print("Strava test preview complete")
 
 
 if __name__ == "__main__":
