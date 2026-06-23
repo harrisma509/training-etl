@@ -59,6 +59,7 @@ def get_config():
         "OUTPUT_JSON",
         "OUTPUT_CSV",
         "LOAD_CHRONIC_C",
+        "GEAR_MAP_CSV",
     ]
 
     cfg = {}
@@ -430,7 +431,7 @@ def sec_to_hms(seconds):
     return f"{seconds // 3600:02d}:{(seconds % 3600) // 60:02d}:{seconds % 60:02d}"
 
 
-def build_daily_training(rows, access_token, chronic_c):
+def build_daily_training(rows, access_token, chronic_c, gear_map):
     warnings = []
     rpe_cache = {}
 
@@ -524,6 +525,7 @@ def build_daily_training(rows, access_token, chronic_c):
             "main_ride_miles": main_ride["distance_mi"] if main_ride else 0,
             "main_ride_elevation_ft": main_ride["elevation_ft"] if main_ride else 0,
             "main_ride_gear_id": main_ride["gear_id"] if main_ride else "",
+            "main_ride_bike_name": lookup_gear_name(gear_map, main_ride["gear_id"]) if main_ride else "",
             "main_ride_load": main_load,
             "main_ride_load_score": round(main_load_score, 2),
             "main_ride_band": main_band,
@@ -569,6 +571,7 @@ def write_daily_csv(path, daily_rows):
         "main_ride_miles",
         "main_ride_elevation_ft",
         "main_ride_gear_id",
+        "main_ride_bike_name",
         "main_ride_load",
         "main_ride_band",
         "main_ride_load_text",
@@ -592,7 +595,44 @@ def write_daily_csv(path, daily_rows):
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(daily_rows)
+def read_gear_map(path):
+    gear = {}
 
+    if not path or not os.path.exists(path):
+        return gear
+
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+
+        for row in reader:
+            gear_id = (row.get("gear_id") or "").strip()
+            if not gear_id:
+                continue
+
+            gear[gear_id] = {
+                "gear_id": gear_id,
+                "bike_name": (row.get("bike_name") or "").strip(),
+                "type": (row.get("type") or "").strip(),
+                "retired": parse_bool(row.get("retired")),
+            }
+
+    return gear
+
+
+def parse_bool(value):
+    s = str(value or "").strip().lower()
+    return s in {"true", "yes", "y", "1"}
+
+
+def lookup_gear_name(gear_map, gear_id):
+    if not gear_id:
+        return ""
+
+    item = gear_map.get(gear_id)
+    if not item:
+        return ""
+
+    return item.get("bike_name") or ""
 
 def main():
     cfg = get_config()
@@ -600,6 +640,8 @@ def main():
     print("Daily training preview starting")
     print(f"Window: last {cfg['DAYS_BACK']} days")
     print(f"Load chronic C used for banding: {cfg['LOAD_CHRONIC_C']}")
+    gear_map = read_gear_map(cfg["GEAR_MAP_CSV"])
+    print(f"Gear map entries loaded: {len(gear_map)}")
 
     token = refresh_access_token(cfg)
     access_token = token["access_token"]
@@ -607,7 +649,7 @@ def main():
     activities = fetch_activities(access_token, cfg["DAYS_BACK"])
     rows = [normalize_activity(a) for a in activities]
 
-    daily, warnings = build_daily_training(rows, access_token, cfg["LOAD_CHRONIC_C"])
+    daily, warnings = build_daily_training(rows, access_token, cfg["LOAD_CHRONIC_C"], gear_map)
 
     print(f"Activities pulled: {len(rows)}")
     print(f"Daily rows built: {len(daily)}")
