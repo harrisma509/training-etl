@@ -1,0 +1,22 @@
+# Secrets
+*.env
+.env
+strava.env
+config/*.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Output files
+tmp/
+logs/
+*.log
+*_preview.json
+*_preview.csv
+
+# OS/editor
+.DS_Store
+.vscode/

@@ -16,20 +16,25 @@ from constants import (
 
 def supplemental_load_for_other(row, rpe):
     minutes = row["moving_sec"] / 60.0
-    sport = (row.get("sport_type") or "").lower().replace(" ", "")
-    name = (row.get("name") or "").lower()
+    category = row.get("activity_category") or "other"
 
-    if is_ski(row):
+    if category == "ski":
         return ski_load_from_rpe(rpe)
 
-    if sport == "walk":
+    if category == "walk":
         return SUPP_MIN_WALK * minutes
 
-    if sport == "yoga":
+    if category == "hike":
+        return 1.5 * minutes
+
+    if category == "mobility":
         return SUPP_MIN_MOBI * minutes
 
-    if "mobility" in name or "stretch" in name:
-        return SUPP_MIN_MOBI * minutes
+    if category == "strength":
+        return SUPP_MIN_MULT * minutes
+
+    if category == "run":
+        return SUPP_MIN_MULT * minutes
 
     return SUPP_MIN_MULT * minutes
 

@@ -28,12 +28,14 @@ def build_daily_training(rows, access_token, chronic_c, gear_map):
 
     for date_key in sorted(by_day.keys()):
         activities = by_day[date_key]
-        rides = [a for a in activities if is_cycling_activity(a)]
+        category_counts = count_activity_categories(activities)
+
+        rides = [activity for activity in activities if is_cycling_activity(activity)]
 
         main_ride = None
 
         if rides:
-            main_ride = max(rides, key=lambda x: x["moving_sec"])
+            main_ride = max(rides, key=lambda activity: activity["moving_sec"])
 
         other_activities = []
 
@@ -43,10 +45,14 @@ def build_daily_training(rows, access_token, chronic_c, gear_map):
 
             other_activities.append(activity)
 
-        other_moving_sec = sum(a["moving_sec"] for a in other_activities)
-        other_distance_mi = round(sum(a["distance_mi"] for a in other_activities), 2)
-        other_elevation_ft = round(sum(a["elevation_ft"] for a in other_activities))
-        other_names = [a["name"] for a in other_activities]
+        other_moving_sec = sum(activity["moving_sec"] for activity in other_activities)
+        other_distance_mi = round(sum(activity["distance_mi"] for activity in other_activities), 2)
+        other_elevation_ft = round(sum(activity["elevation_ft"] for activity in other_activities))
+
+        other_names = [
+            f"{activity['name']} ({activity.get('activity_category', 'other')})"
+            for activity in other_activities
+        ]
 
         other_load_raw = 0.0
 
@@ -56,16 +62,7 @@ def build_daily_training(rows, access_token, chronic_c, gear_map):
 
         other_load = round_half_up(other_load_raw) if other_load_raw > 0 else 0
 
-        zone = {
-            "z1_sec": 0,
-            "z2_sec": 0,
-            "z3_sec": 0,
-            "z4_sec": 0,
-            "z5_sec": 0,
-            "stream_moving_sec": 0,
-            "zone_text": "",
-            "warning": "",
-        }
+        zone = empty_zone_result()
 
         main_load = 0
         main_load_score = 0.0
@@ -90,8 +87,11 @@ def build_daily_training(rows, access_token, chronic_c, gear_map):
                 main_load = round_half_up(main_load_score)
                 main_band = intensity_band(main_load_score, chronic_c)
                 main_load_text = f"{main_load} ({main_band})"
+
             except Exception as exc:
-                warnings.append(f"Could not fetch HR streams for {main_ride['id']} {main_ride['name']}: {exc}")
+                warnings.append(
+                    f"Could not fetch HR streams for {main_ride['id']} {main_ride['name']}: {exc}"
+                )
 
         total_load = main_load + other_load
 
@@ -99,9 +99,20 @@ def build_daily_training(rows, access_token, chronic_c, gear_map):
             "date": date_key,
             "activity_count": len(activities),
 
+            "activity_categories": format_category_counts(category_counts),
+            "ride_count": category_counts.get("ride", 0),
+            "walk_count": category_counts.get("walk", 0),
+            "hike_count": category_counts.get("hike", 0),
+            "strength_count": category_counts.get("strength", 0),
+            "mobility_count": category_counts.get("mobility", 0),
+            "ski_count": category_counts.get("ski", 0),
+            "run_count": category_counts.get("run", 0),
+            "other_count": category_counts.get("other", 0),
+
             "main_ride_id": main_ride["id"] if main_ride else "",
             "main_ride_name": main_ride["name"] if main_ride else "",
             "main_ride_sport_type": main_ride["sport_type"] if main_ride else "",
+            "main_ride_category": main_ride.get("activity_category", "") if main_ride else "",
             "main_ride_moving_sec": main_ride["moving_sec"] if main_ride else 0,
             "main_ride_elapsed_sec": main_ride["elapsed_sec"] if main_ride else 0,
             "main_ride_time": sec_to_hms(main_ride["moving_sec"]) if main_ride else "",
@@ -139,6 +150,39 @@ def build_daily_training(rows, access_token, chronic_c, gear_map):
     return daily, warnings
 
 
+def count_activity_categories(activities):
+    category_counts = {}
+
+    for activity in activities:
+        category = activity.get("activity_category") or "other"
+        category_counts[category] = category_counts.get(category, 0) + 1
+
+    return category_counts
+
+
+def format_category_counts(category_counts):
+    if not category_counts:
+        return ""
+
+    return ", ".join(
+        f"{category}:{count}"
+        for category, count in sorted(category_counts.items())
+    )
+
+
+def empty_zone_result():
+    return {
+        "z1_sec": 0,
+        "z2_sec": 0,
+        "z3_sec": 0,
+        "z4_sec": 0,
+        "z5_sec": 0,
+        "stream_moving_sec": 0,
+        "zone_text": "",
+        "warning": "",
+    }
+
+
 def get_activity_rpe(row, access_token, rpe_cache, warnings):
     if not is_ski(row):
         return -1
@@ -160,4 +204,5 @@ def get_activity_rpe(row, access_token, rpe_cache, warnings):
         rpe = -1
 
     rpe_cache[activity_id] = rpe
+
     return rpe
