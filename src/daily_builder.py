@@ -1,9 +1,10 @@
-from activity_utils import is_cycling_activity, is_ski, sec_to_hms
+from activity_utils import is_cycling_activity, sec_to_hms
 from gear import lookup_gear_name
 from load_rules import (
     intensity_band,
     intensity_score_from_zones,
     round_half_up,
+    session_rpe_load,
     supplemental_load_for_other,
 )
 from strava_client import fetch_activity_detail, fetch_activity_stream_zones, fetch_hr_zones
@@ -57,7 +58,11 @@ def build_daily_training(rows, access_token, chronic_c, gear_map):
         other_load_raw = 0.0
 
         for other in other_activities:
-            rpe = get_activity_rpe(other, access_token, rpe_cache, warnings)
+            rpe = -1
+
+            if other.get("activity_category") == "ride" and not other.get("has_heartrate"):
+                rpe = get_activity_rpe(other, access_token, rpe_cache, warnings)
+
             other_load_raw += supplemental_load_for_other(other, rpe)
 
         other_load = round_half_up(other_load_raw) if other_load_raw > 0 else 0
@@ -68,6 +73,8 @@ def build_daily_training(rows, access_token, chronic_c, gear_map):
         main_load_score = 0.0
         main_band = ""
         main_load_text = ""
+        main_rpe = -1
+        main_load_source = ""
 
         if main_ride and main_ride["has_heartrate"] and z_min and z_max:
             try:
@@ -85,13 +92,27 @@ def build_daily_training(rows, access_token, chronic_c, gear_map):
                 )
 
                 main_load = round_half_up(main_load_score)
-                main_band = intensity_band(main_load_score, chronic_c)
-                main_load_text = f"{main_load} ({main_band})"
+
+                if main_load > 0:
+                    main_band = intensity_band(main_load_score, chronic_c)
+                    main_load_text = f"{main_load} ({main_band})"
+                    main_load_source = "hr_zones"
 
             except Exception as exc:
                 warnings.append(
                     f"Could not fetch HR streams for {main_ride['id']} {main_ride['name']}: {exc}"
                 )
+
+        if main_ride and main_load == 0:
+            main_rpe = get_activity_rpe(main_ride, access_token, rpe_cache, warnings)
+
+            if main_rpe is not None and main_rpe >= 0:
+                minutes = main_ride["moving_sec"] / 60.0
+                main_load_score = session_rpe_load(minutes, main_rpe)
+                main_load = round_half_up(main_load_score)
+                main_band = intensity_band(main_load_score, chronic_c)
+                main_load_text = f"{main_load} ({main_band}, RPE)"
+                main_load_source = "rpe"
 
         total_load = main_load + other_load
 
@@ -121,6 +142,9 @@ def build_daily_training(rows, access_token, chronic_c, gear_map):
             "main_ride_elevation_ft": main_ride["elevation_ft"] if main_ride else 0,
             "main_ride_gear_id": main_ride["gear_id"] if main_ride else "",
             "main_ride_bike_name": lookup_gear_name(gear_map, main_ride["gear_id"]) if main_ride else "",
+
+            "main_ride_rpe": main_rpe,
+            "main_ride_load_source": main_load_source,
             "main_ride_load": main_load,
             "main_ride_load_score": round(main_load_score, 2),
             "main_ride_band": main_band,
@@ -184,9 +208,6 @@ def empty_zone_result():
 
 
 def get_activity_rpe(row, access_token, rpe_cache, warnings):
-    if not is_ski(row):
-        return -1
-
     activity_id = row.get("id")
 
     if not activity_id:

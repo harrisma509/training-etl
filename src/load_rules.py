@@ -18,6 +18,9 @@ def supplemental_load_for_other(row, rpe):
     minutes = row["moving_sec"] / 60.0
     category = row.get("activity_category") or "other"
 
+    if category == "ride" and rpe is not None and rpe >= 0:
+        return session_rpe_load(minutes, rpe)
+
     if category == "ski":
         return ski_load_from_rpe(rpe)
 
@@ -39,8 +42,12 @@ def supplemental_load_for_other(row, rpe):
     return SUPP_MIN_MULT * minutes
 
 
+def session_rpe_load(minutes, rpe):
+    return minutes * rpe
+
+
 def ski_load_from_rpe(rpe):
-    if rpe < 0:
+    if rpe is None or rpe < 0:
         load = SKI_LOAD_BASE
     else:
         load = SKI_LOAD_BASE + SKI_RPE_STEP * (rpe - 5)

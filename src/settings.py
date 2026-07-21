@@ -27,14 +27,16 @@ def get_config():
     file_values = read_env_file(env_file)
 
     keys = [
-        "STRAVA_CLIENT_ID",
-        "STRAVA_CLIENT_SECRET",
-        "STRAVA_REFRESH_TOKEN",
-        "DAYS_BACK",
-        "OUTPUT_JSON",
-        "OUTPUT_CSV",
-        "LOAD_CHRONIC_C",
-        "GEAR_MAP_CSV",
+    "STRAVA_CLIENT_ID",
+    "STRAVA_CLIENT_SECRET",
+    "STRAVA_REFRESH_TOKEN",
+    "DAYS_BACK",
+    "OUTPUT_JSON",
+    "OUTPUT_CSV",
+    "OUTPUT_WEEKLY_JSON",
+    "OUTPUT_WEEKLY_CSV",
+    "LOAD_CHRONIC_C",
+    "GEAR_MAP_CSV",
     ]
 
     cfg = {}
@@ -54,6 +56,8 @@ def get_config():
     cfg["DAYS_BACK"] = int(cfg.get("DAYS_BACK") or 7)
     cfg["OUTPUT_JSON"] = cfg.get("OUTPUT_JSON") or "/tmp/daily_training.json"
     cfg["OUTPUT_CSV"] = cfg.get("OUTPUT_CSV") or "/tmp/daily_training.csv"
+    cfg["OUTPUT_WEEKLY_JSON"] = cfg.get("OUTPUT_WEEKLY_JSON") or "/tmp/weekly_training.json"
+    cfg["OUTPUT_WEEKLY_CSV"] = cfg.get("OUTPUT_WEEKLY_CSV") or "/tmp/weekly_training.csv"
     cfg["LOAD_CHRONIC_C"] = float(cfg.get("LOAD_CHRONIC_C") or DEFAULT_CHRONIC_C)
     cfg["GEAR_MAP_CSV"] = cfg.get("GEAR_MAP_CSV") or "/config/gear_map.csv"
 

@@ -6,7 +6,8 @@ from daily_builder import build_daily_training
 from gear import read_gear_map
 from settings import get_config
 from strava_client import fetch_activities, refresh_access_token
-from writers import write_daily_csv, write_json
+from weekly_builder import build_weekly_training
+from writers import write_daily_csv, write_json, write_weekly_csv
 
 
 def main():
@@ -23,7 +24,7 @@ def main():
     access_token = token["access_token"]
 
     activities = fetch_activities(access_token, cfg["DAYS_BACK"])
-    rows = [normalize_activity(a) for a in activities]
+    rows = [normalize_activity(activity) for activity in activities]
 
     daily, warnings = build_daily_training(
         rows=rows,
@@ -31,6 +32,8 @@ def main():
         chronic_c=cfg["LOAD_CHRONIC_C"],
         gear_map=gear_map,
     )
+
+    weekly = build_weekly_training(daily)
 
     print(f"Activities pulled: {len(rows)}")
     print(f"Daily rows built: {len(daily)}")
@@ -46,27 +49,56 @@ def main():
             f"z4z5={sec_to_hms(row['z4_z5_sec'])}"
         )
 
+    print(f"Weekly rows built: {len(weekly)}")
+
+    for row in weekly:
+        ac_ratio = row["ac_ratio"] if row["ac_ratio"] is not None else "n/a"
+        ramp = row["ramp_pct_display"] if row["ramp_pct_display"] else "n/a"
+
+        print(
+            f"{row['week_start']} | "
+            f"load={row['total_load']} "
+            f"ramp={ramp} "
+            f"ac={ac_ratio} "
+            f"status={row['status_level']}"
+        )
+
     if warnings:
         print(f"Warnings: {len(warnings)}")
 
         for warning in warnings:
             print(f"WARNING: {warning}")
 
-    output = {
-        "run_at_utc": datetime.now(timezone.utc).isoformat(),
+    run_at_utc = datetime.now(timezone.utc).isoformat()
+
+    daily_output = {
+        "run_at_utc": run_at_utc,
         "days_back": cfg["DAYS_BACK"],
         "load_chronic_c": cfg["LOAD_CHRONIC_C"],
         "activity_count": len(rows),
         "daily_training": daily,
+        "weekly_training": weekly,
         "activities": rows,
         "warnings": warnings,
     }
 
-    write_json(cfg["OUTPUT_JSON"], output)
+    weekly_output = {
+        "run_at_utc": run_at_utc,
+        "days_back": cfg["DAYS_BACK"],
+        "weekly_training": weekly,
+        "warnings": warnings,
+    }
+
+    write_json(cfg["OUTPUT_JSON"], daily_output)
     write_daily_csv(cfg["OUTPUT_CSV"], daily)
 
-    print(f"JSON written: {cfg['OUTPUT_JSON']}")
-    print(f"CSV written: {cfg['OUTPUT_CSV']}")
+    write_json(cfg["OUTPUT_WEEKLY_JSON"], weekly_output)
+    write_weekly_csv(cfg["OUTPUT_WEEKLY_CSV"], weekly)
+
+    print(f"Daily JSON written: {cfg['OUTPUT_JSON']}")
+    print(f"Daily CSV written: {cfg['OUTPUT_CSV']}")
+    print(f"Weekly JSON written: {cfg['OUTPUT_WEEKLY_JSON']}")
+    print(f"Weekly CSV written: {cfg['OUTPUT_WEEKLY_CSV']}")
     print("Training sync complete")
 
 
