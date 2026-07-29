@@ -1,0 +1,21 @@
+name: training-runner
+
+services:
+  training-runner:
+    build: .
+    container_name: training-runner
+    restart: unless-stopped
+    environment:
+      ENV_FILE: /config/strava.env
+    volumes:
+      - /volume1/docker/training/etl:/app:ro
+      - /volume1/docker/training/config:/config:ro
+      - /volume1/docker/training/tmp:/tmp:rw
+      - /volume1/docker/training/logs:/logs:rw
+    networks:
+      - training_net
+    command: python -u /app/sync_worker.py
+
+networks:
+  training_net:
+    external: true
