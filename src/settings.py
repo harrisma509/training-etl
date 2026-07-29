@@ -1,7 +1,12 @@
 import os
-
 from constants import DEFAULT_CHRONIC_C
 
+class Config(dict):
+    def __getattr__(self, key):
+        try:
+            return self[key]
+        except KeyError:
+            raise AttributeError(key)
 
 def read_env_file(path):
     values = {}
@@ -31,12 +36,20 @@ def get_config():
     "STRAVA_CLIENT_SECRET",
     "STRAVA_REFRESH_TOKEN",
     "DAYS_BACK",
+    "SYNC_WORKER_POLL_SECONDS",
+    "AUTO_SYNC_MINUTES",
     "OUTPUT_JSON",
     "OUTPUT_CSV",
     "OUTPUT_WEEKLY_JSON",
     "OUTPUT_WEEKLY_CSV",
     "LOAD_CHRONIC_C",
     "GEAR_MAP_CSV",
+    "WRITE_DB",
+    "DB_HOST",
+    "DB_PORT",
+    "DB_NAME",
+    "DB_USER",
+    "DB_PASSWORD",
     ]
 
     cfg = {}
@@ -60,5 +73,13 @@ def get_config():
     cfg["OUTPUT_WEEKLY_CSV"] = cfg.get("OUTPUT_WEEKLY_CSV") or "/tmp/weekly_training.csv"
     cfg["LOAD_CHRONIC_C"] = float(cfg.get("LOAD_CHRONIC_C") or DEFAULT_CHRONIC_C)
     cfg["GEAR_MAP_CSV"] = cfg.get("GEAR_MAP_CSV") or "/config/gear_map.csv"
+    cfg["WRITE_DB"] = str(cfg.get("WRITE_DB") or "false").lower() == "true"
+    cfg["DB_HOST"] = cfg.get("DB_HOST") or "training-postgres"
+    cfg["DB_PORT"] = cfg.get("DB_PORT") or "5432"
+    cfg["DB_NAME"] = cfg.get("DB_NAME") or "training"
+    cfg["DB_USER"] = cfg.get("DB_USER") or "training_app"
+    cfg["DB_PASSWORD"] = cfg.get("DB_PASSWORD") or ""
+    cfg["SYNC_WORKER_POLL_SECONDS"] = int(cfg.get("SYNC_WORKER_POLL_SECONDS") or 60)
+    cfg["AUTO_SYNC_MINUTES"] = int(cfg.get("AUTO_SYNC_MINUTES") or 60)
 
-    return cfg
+    return Config(cfg)

@@ -8,6 +8,7 @@ from settings import get_config
 from strava_client import fetch_activities, refresh_access_token
 from weekly_builder import build_weekly_training
 from writers import write_daily_csv, write_json, write_weekly_csv
+from db_writer import write_training_to_db
 
 
 def main():
@@ -99,6 +100,19 @@ def main():
     print(f"Daily CSV written: {cfg['OUTPUT_CSV']}")
     print(f"Weekly JSON written: {cfg['OUTPUT_WEEKLY_JSON']}")
     print(f"Weekly CSV written: {cfg['OUTPUT_WEEKLY_CSV']}")
+
+    write_training_to_db(
+        cfg=cfg,
+        activities=rows,
+        daily_rows=daily,
+        weekly_rows=weekly,
+        warnings=warnings,
+        gear_map=gear_map,
+        run_at_utc=run_at_utc,
+    )
+    if cfg.get("WRITE_DB"):
+        print("Postgres write complete")
+    
     print("Training sync complete")
 
 
