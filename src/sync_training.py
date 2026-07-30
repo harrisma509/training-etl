@@ -8,6 +8,7 @@ from strava_client import fetch_activities, refresh_access_token
 from weekly_builder import build_weekly_training
 from writers import write_daily_csv, write_json, write_weekly_csv
 from db_writer import write_training_to_db
+from gear_db import fetch_gear_display_map
 
 
 def main():
@@ -23,10 +24,14 @@ def main():
     activities = fetch_activities(access_token, cfg["DAYS_BACK"])
     rows = [normalize_activity(activity) for activity in activities]
 
+    gear_display_map = fetch_gear_display_map(cfg) if cfg.get("WRITE_DB") else {}
+    print(f"Gear records loaded from DB: {len(gear_display_map)}")
+
     daily, warnings = build_daily_training(
         rows=rows,
         access_token=access_token,
         chronic_c=cfg["LOAD_CHRONIC_C"],
+        gear_display_map=gear_display_map,
     )
 
     weekly = build_weekly_training(daily)

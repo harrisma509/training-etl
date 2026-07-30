@@ -9,8 +9,9 @@ from load_rules import (
 from strava_client import fetch_activity_detail, fetch_activity_stream_zones, fetch_hr_zones
 
 
-def build_daily_training(rows, access_token, chronic_c):
+def build_daily_training(rows, access_token, chronic_c, gear_display_map=None):
     warnings = []
+    gear_display_map = gear_display_map or {}
     rpe_cache = {}
 
     try:
@@ -128,7 +129,6 @@ def build_daily_training(rows, access_token, chronic_c):
             "ski_count": category_counts.get("ski", 0),
             "run_count": category_counts.get("run", 0),
             "other_count": category_counts.get("other", 0),
-
             "main_ride_id": main_ride["id"] if main_ride else "",
             "main_ride_name": main_ride["name"] if main_ride else "",
             "main_ride_sport_type": main_ride["sport_type"] if main_ride else "",
@@ -140,7 +140,11 @@ def build_daily_training(rows, access_token, chronic_c):
             "main_ride_miles": main_ride["distance_mi"] if main_ride else 0,
             "main_ride_elevation_ft": main_ride["elevation_ft"] if main_ride else 0,
             "main_ride_gear_id": main_ride["gear_id"] if main_ride else "",
-            "main_ride_bike_name": "",
+            "main_ride_bike_name": (
+                gear_display_map.get(main_ride.get("gear_id"))
+                if main_ride and main_ride.get("gear_id")
+                else ""
+            ),
             "main_ride_rpe": main_rpe,
             "main_ride_load_source": main_load_source,
             "main_ride_load": main_load,
