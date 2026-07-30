@@ -1,0 +1,17 @@
+gear_id,bike_name,type,retired
+b17052877,2025 Orbea Denna,Bike,FALSE
+b15895517,2025 Orbea Wild,Bike,FALSE
+b10810005,2022 Orbea Rallon,Bike,FALSE
+b157640,1999 Moots YBB,Bike,FALSE
+b11826829,2022 Peloton Bike+,Bike,FALSE
+b631358,2010 Orbea Onix,Bike,FALSE
+b959120,zz Other (Borrowed, Rented),Bike,FALSE
+b3839257,Yeti SB5.5,Bike,TRUE
+b147331,Yeti SB-66 Carbon,Bike,TRUE
+b1916237,Da Vinci Grand Junction,Bike,TRUE
+b157641,Norco A-Line,Bike,TRUE
+b157638,Orbea Lobular,Bike,TRUE
+g24950415,ASICS Gel Excite 10,Shoe,FALSE
+g3317273,Lowa Renegade,Shoe,FALSE
+g8947568,ASICS Gel Excite 8,Shoe,TRUE
+g693503,HOKA,Shoe,TRUE
