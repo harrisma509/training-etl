@@ -1,5 +1,5 @@
 import json
-from gear import lookup_gear_name
+from weekly_builder import build_weekly_training
 
 
 
@@ -19,13 +19,15 @@ def write_training_to_db(cfg, activities, daily_rows, weekly_rows, warnings, gea
         with conn.cursor() as cur:
 
             print("DB write: activities")
-            upsert_strava_activities(cur, activities, gear_map)
+            upsert_strava_activities(cur, activities)
 
             print("DB write: daily")
             upsert_daily_training(cur, daily_rows)
+            print("DB rebuild: weekly from full daily_training")
+            all_daily_rows = fetch_all_daily_training_for_weekly(cur)
+            weekly_rows = build_weekly_training(all_daily_rows)
+            replace_weekly_training(cur, weekly_rows)
 
-            print("DB write: weekly")
-            upsert_weekly_training(cur, weekly_rows)
 
             print("DB write: sync log")
 
@@ -41,9 +43,151 @@ def write_training_to_db(cfg, activities, daily_rows, weekly_rows, warnings, gea
             )
 
         conn.commit()
+def fetch_all_daily_training_for_weekly(cur):
+    cur.execute("""
+        SELECT
+            date,
+            total_load,
+            main_ride_load,
+            other_load,
+            ride_count,
+            walk_count,
+            hike_count,
+            strength_count,
+            mobility_count,
+            ski_count,
+            run_count,
+            other_count,
+            main_ride_band
+        FROM daily_training
+        ORDER BY date
+    """)
+
+    columns = [column.name for column in cur.description]
+    return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 
-def upsert_strava_activities(cur, activities, gear_map):
+def replace_weekly_training(cur, weekly_rows):
+    cur.execute("DELETE FROM weekly_training")
+    upsert_weekly_training(cur, weekly_rows)
+
+def collect_gear_ids(activities):
+    gear_ids = set()
+
+    for activity in activities:
+        gear_id = activity.get("gear_id")
+        if gear_id:
+            gear_ids.add(gear_id)
+
+    return sorted(gear_ids)
+
+
+def infer_gear_type(gear_id):
+    if not gear_id:
+        return "Unknown"
+
+    if gear_id.startswith("b"):
+        return "Bike"
+
+    if gear_id.startswith("g"):
+        return "Shoe"
+
+    return "Unknown"
+
+
+def infer_gear_category(gear_id):
+    gear_type = infer_gear_type(gear_id)
+
+    if gear_type == "Bike":
+        return "Unknown Bike"
+
+    if gear_type == "Shoe":
+        return "Shoe"
+
+    return "Unknown"
+
+
+def ensure_gear_records(cur, activities):
+    gear_ids = collect_gear_ids(activities)
+
+    if not gear_ids:
+        return
+
+    sql = """
+        INSERT INTO gear (
+            gear_id,
+            gear_name,
+            gear_type,
+            category,
+            retired
+        )
+        VALUES (
+            %s,
+            %s,
+            %s,
+            %s,
+            FALSE
+        )
+        ON CONFLICT (gear_id)
+        DO NOTHING
+    """
+
+    for gear_id in gear_ids:
+        gear_type = infer_gear_type(gear_id)
+        category = infer_gear_category(gear_id)
+
+        cur.execute(
+            sql,
+            (
+                gear_id,
+                f"Unknown Gear {gear_id}",
+                gear_type,
+                category,
+            ),
+        )
+
+
+def fetch_gear_display_names(cur, activities):
+    gear_ids = collect_gear_ids(activities)
+
+    if not gear_ids:
+        return {}
+
+    cur.execute(
+        """
+        SELECT
+            gear_id,
+            brand,
+            model_year,
+            gear_name
+        FROM gear
+        WHERE gear_id = ANY(%s)
+        """,
+        (gear_ids,),
+    )
+
+    rows = cur.fetchall()
+    display_names = {}
+
+    for gear_id, brand, model_year, gear_name in rows:
+        parts = []
+
+        if model_year:
+            parts.append(str(model_year))
+
+        if brand:
+            parts.append(brand)
+
+        if gear_name:
+            parts.append(gear_name)
+
+        display_names[gear_id] = " ".join(parts) if parts else gear_id
+
+    return display_names
+
+def upsert_strava_activities(cur, activities):
+    ensure_gear_records(cur, activities)
+    gear_display_names = fetch_gear_display_names(cur, activities)
     sql = """
         INSERT INTO strava_activities (
             activity_id,
@@ -101,7 +245,7 @@ def upsert_strava_activities(cur, activities, gear_map):
     """
 
     for activity in activities:
-        gear_id = activity.get("gear_id") or ""
+        gear_id = activity.get("gear_id") or None
 
         params = {
             "activity_id": activity.get("id"),
@@ -117,7 +261,7 @@ def upsert_strava_activities(cur, activities, gear_map):
             "average_hr": activity.get("average_hr"),
             "max_hr": activity.get("max_hr"),
             "gear_id": gear_id,
-            "bike_name": lookup_gear_name(gear_map, gear_id),
+            "bike_name": gear_display_names.get(gear_id) if gear_id else None,
             "raw_json": json.dumps(activity),
         }
         for key, value in params.items():
