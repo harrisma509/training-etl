@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 
 from activity_utils import normalize_activity, sec_to_hms
 from daily_builder import build_daily_training
-from gear import read_gear_map
 from settings import get_config
 from strava_client import fetch_activities, refresh_access_token
 from weekly_builder import build_weekly_training
@@ -18,9 +17,6 @@ def main():
     print(f"Window: last {cfg['DAYS_BACK']} days")
     print(f"Load chronic C used for banding: {cfg['LOAD_CHRONIC_C']}")
 
-    gear_map = read_gear_map(cfg["GEAR_MAP_CSV"])
-    print(f"Gear map entries loaded: {len(gear_map)}")
-
     token = refresh_access_token(cfg)
     access_token = token["access_token"]
 
@@ -31,7 +27,6 @@ def main():
         rows=rows,
         access_token=access_token,
         chronic_c=cfg["LOAD_CHRONIC_C"],
-        gear_map=gear_map,
     )
 
     weekly = build_weekly_training(daily)
@@ -107,7 +102,6 @@ def main():
         daily_rows=daily,
         weekly_rows=weekly,
         warnings=warnings,
-        gear_map=gear_map,
         run_at_utc=run_at_utc,
     )
     if cfg.get("WRITE_DB"):

@@ -3,7 +3,7 @@ from weekly_builder import build_weekly_training
 
 
 
-def write_training_to_db(cfg, activities, daily_rows, weekly_rows, warnings, gear_map, run_at_utc):
+def write_training_to_db(cfg, activities, daily_rows, weekly_rows, warnings, run_at_utc):
     if not cfg.get("WRITE_DB"):
         return
 

@@ -1,5 +1,4 @@
 from activity_utils import is_cycling_activity, sec_to_hms
-from gear import lookup_gear_name
 from load_rules import (
     intensity_band,
     intensity_score_from_zones,
@@ -10,7 +9,7 @@ from load_rules import (
 from strava_client import fetch_activity_detail, fetch_activity_stream_zones, fetch_hr_zones
 
 
-def build_daily_training(rows, access_token, chronic_c, gear_map):
+def build_daily_training(rows, access_token, chronic_c):
     warnings = []
     rpe_cache = {}
 
@@ -141,8 +140,7 @@ def build_daily_training(rows, access_token, chronic_c, gear_map):
             "main_ride_miles": main_ride["distance_mi"] if main_ride else 0,
             "main_ride_elevation_ft": main_ride["elevation_ft"] if main_ride else 0,
             "main_ride_gear_id": main_ride["gear_id"] if main_ride else "",
-            "main_ride_bike_name": lookup_gear_name(gear_map, main_ride["gear_id"]) if main_ride else "",
-
+            "main_ride_bike_name": "",
             "main_ride_rpe": main_rpe,
             "main_ride_load_source": main_load_source,
             "main_ride_load": main_load,
@@ -150,7 +148,6 @@ def build_daily_training(rows, access_token, chronic_c, gear_map):
             "main_ride_band": main_band,
             "main_ride_load_text": main_load_text,
             "main_ride_hr_zones": zone["zone_text"],
-
             "z1_sec": zone["z1_sec"],
             "z2_sec": zone["z2_sec"],
             "z3_sec": zone["z3_sec"],
@@ -158,7 +155,6 @@ def build_daily_training(rows, access_token, chronic_c, gear_map):
             "z5_sec": zone["z5_sec"],
             "z4_z5_sec": zone["z4_sec"] + zone["z5_sec"],
             "stream_moving_sec": zone["stream_moving_sec"],
-
             "other_activity_count": len(other_activities),
             "other_activity_names": "\n".join(other_names),
             "other_moving_sec": other_moving_sec,
@@ -167,7 +163,6 @@ def build_daily_training(rows, access_token, chronic_c, gear_map):
             "other_elevation_ft": other_elevation_ft,
             "other_load": other_load,
             "other_load_raw": round(other_load_raw, 2),
-
             "total_load": total_load,
         })
 

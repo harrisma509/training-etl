@@ -43,7 +43,6 @@ def get_config():
     "OUTPUT_WEEKLY_JSON",
     "OUTPUT_WEEKLY_CSV",
     "LOAD_CHRONIC_C",
-    "GEAR_MAP_CSV",
     "WRITE_DB",
     "DB_HOST",
     "DB_PORT",
@@ -72,7 +71,6 @@ def get_config():
     cfg["OUTPUT_WEEKLY_JSON"] = cfg.get("OUTPUT_WEEKLY_JSON") or "/tmp/weekly_training.json"
     cfg["OUTPUT_WEEKLY_CSV"] = cfg.get("OUTPUT_WEEKLY_CSV") or "/tmp/weekly_training.csv"
     cfg["LOAD_CHRONIC_C"] = float(cfg.get("LOAD_CHRONIC_C") or DEFAULT_CHRONIC_C)
-    cfg["GEAR_MAP_CSV"] = cfg.get("GEAR_MAP_CSV") or "/config/gear_map.csv"
     cfg["WRITE_DB"] = str(cfg.get("WRITE_DB") or "false").lower() == "true"
     cfg["DB_HOST"] = cfg.get("DB_HOST") or "training-postgres"
     cfg["DB_PORT"] = cfg.get("DB_PORT") or "5432"
