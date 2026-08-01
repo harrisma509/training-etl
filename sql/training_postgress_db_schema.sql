@@ -198,6 +198,8 @@ CREATE TABLE IF NOT EXISTS health_rhr (
 	source TEXT,
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_health_rhr_measured_at
+ON health_rhr (measured_at);
 
 CREATE TABLE IF NOT EXISTS health_steps (
 	date DATE PRIMARY KEY,
@@ -206,6 +208,8 @@ CREATE TABLE IF NOT EXISTS health_steps (
 	source TEXT,
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_health_steps_measured_at
+ON health_steps (measured_at);
 
 CREATE TABLE IF NOT EXISTS health_hrv (
 	date DATE PRIMARY KEY,
@@ -225,6 +229,28 @@ ON health_hrv (measured_at);
 CREATE INDEX IF NOT EXISTS idx_health_hrv_sample_timestamp
 ON health_hrv (sample_timestamp);
 
+CREATE TABLE IF NOT EXISTS health_sleep (
+	date DATE PRIMARY KEY,
+	sleep_start TIMESTAMPTZ,
+	sleep_end TIMESTAMPTZ,
+	in_bed_start TIMESTAMPTZ,
+	in_bed_end TIMESTAMPTZ,
+	deep_sleep_hr NUMERIC,
+	core_sleep_hr NUMERIC,
+	rem_sleep_hr NUMERIC,
+	awake_hr NUMERIC,
+	total_sleep_hr NUMERIC,
+	asleep_hr NUMERIC,
+	in_bed_hr NUMERIC,
+	sleep_score INTEGER,
+	duration_pts INTEGER,
+	consistency_pts INTEGER,
+	interruptions_pts INTEGER,
+	score_version TEXT,
+	source TEXT,
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS health_vo2_max (
 	week_start DATE PRIMARY KEY,
 	measured_at TIMESTAMPTZ NOT NULL,
@@ -232,6 +258,8 @@ CREATE TABLE IF NOT EXISTS health_vo2_max (
 	source TEXT,
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_health_vo2_max_measured_at
+ON health_vo2_max (measured_at);
 
 CREATE TABLE IF NOT EXISTS health_falls (
 	date DATE PRIMARY KEY,
@@ -240,3 +268,5 @@ CREATE TABLE IF NOT EXISTS health_falls (
 	source TEXT,
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_health_falls_measured_at
+ON health_falls (measured_at);
