@@ -179,3 +179,64 @@ CREATE TABLE public.strava_activities (
 	CONSTRAINT fk_strava_activities_gear FOREIGN KEY (gear_id) REFERENCES public.gear(gear_id)
 );
 CREATE INDEX idx_strava_activities_gear_id ON public.strava_activities USING btree (gear_id);
+
+CREATE TABLE IF NOT EXISTS health_weight (
+    date DATE PRIMARY KEY,
+    measured_at TIMESTAMPTZ,
+    weight_lb NUMERIC,
+    body_fat_pct NUMERIC,
+    lean_body_mass_lb NUMERIC,
+    bmi NUMERIC,
+    source TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS health_rhr (
+	date DATE PRIMARY KEY,
+	measured_at TIMESTAMPTZ NOT NULL,
+	rhr_bpm INTEGER NOT NULL CHECK (rhr_bpm > 0),
+	source TEXT,
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS health_steps (
+	date DATE PRIMARY KEY,
+	measured_at TIMESTAMPTZ NOT NULL,
+	steps INTEGER NOT NULL CHECK (steps >= 0),
+	source TEXT,
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS health_hrv (
+	date DATE PRIMARY KEY,
+	measured_at TIMESTAMPTZ NOT NULL,
+	hrv_sdnn_ms NUMERIC NOT NULL CHECK (hrv_sdnn_ms > 0),
+	source TEXT,
+	sample_timestamp TIMESTAMPTZ,
+	mins_before_wake INTEGER,
+	rule TEXT,
+	proximity_level TEXT,
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_health_hrv_measured_at
+ON health_hrv (measured_at);
+
+CREATE INDEX IF NOT EXISTS idx_health_hrv_sample_timestamp
+ON health_hrv (sample_timestamp);
+
+CREATE TABLE IF NOT EXISTS health_vo2_max (
+	week_start DATE PRIMARY KEY,
+	measured_at TIMESTAMPTZ NOT NULL,
+	vo2max NUMERIC NOT NULL CHECK (vo2max > 0),
+	source TEXT,
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS health_falls (
+	date DATE PRIMARY KEY,
+	measured_at TIMESTAMPTZ NOT NULL,
+	falls INTEGER NOT NULL CHECK (falls >= 0),
+	source TEXT,
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
