@@ -270,3 +270,198 @@ CREATE TABLE IF NOT EXISTS health_falls (
 );
 CREATE INDEX IF NOT EXISTS idx_health_falls_measured_at
 ON health_falls (measured_at);
+
+CREATE OR REPLACE VIEW public.weekly_zone_summary AS
+WITH daily_zone_source AS (
+	SELECT
+		(
+			"date"
+			- ((EXTRACT(ISODOW FROM "date")::int - 1) * INTERVAL '1 day')
+		)::date AS week_start,
+
+		COALESCE(ride_count, 0) AS ride_count,
+		COALESCE(z1_sec, 0) AS z1_sec,
+		COALESCE(z2_sec, 0) AS z2_sec,
+		COALESCE(z3_sec, 0) AS z3_sec,
+		COALESCE(z4_sec, 0) AS z4_sec,
+		COALESCE(z5_sec, 0) AS z5_sec,
+		COALESCE(stream_moving_sec, 0) AS stream_moving_sec
+	FROM public.daily_training
+),
+weekly AS (
+	SELECT
+		week_start,
+		week_start + 6 AS week_end,
+
+		SUM(ride_count)::int AS ride_count,
+
+		SUM(z1_sec)::bigint AS z1_sec,
+		SUM(z2_sec)::bigint AS z2_sec,
+		SUM(z3_sec)::bigint AS z3_sec,
+		SUM(z4_sec)::bigint AS z4_sec,
+		SUM(z5_sec)::bigint AS z5_sec,
+		SUM(stream_moving_sec)::bigint AS stream_moving_sec
+	FROM daily_zone_source
+	GROUP BY week_start
+),
+calc AS (
+	SELECT
+		week_start,
+		week_end,
+		ride_count,
+
+		z1_sec,
+		z2_sec,
+		z3_sec,
+		z4_sec,
+		z5_sec,
+		stream_moving_sec,
+
+		z1_sec + z2_sec AS z1_z2_sec,
+		z4_sec + z5_sec AS z4_z5_sec,
+		z1_sec + z2_sec + z3_sec + z4_sec + z5_sec AS zone_total_sec
+	FROM weekly
+)
+SELECT
+	week_start,
+	week_end,
+	ride_count,
+
+	zone_total_sec AS ride_time_sec,
+	z1_z2_sec,
+	z3_sec,
+	z4_z5_sec,
+	z1_sec,
+	z2_sec,
+	z4_sec,
+	z5_sec,
+	stream_moving_sec,
+
+	stream_moving_sec - zone_total_sec AS zone_time_delta_sec,
+
+	CASE
+		WHEN zone_total_sec > 0 THEN ROUND((z1_z2_sec::numeric / zone_total_sec) * 100, 0)::int
+		ELSE NULL
+	END AS z1_z2_pct,
+
+	CASE
+		WHEN zone_total_sec > 0 THEN ROUND((z3_sec::numeric / zone_total_sec) * 100, 0)::int
+		ELSE NULL
+	END AS z3_pct,
+
+	CASE
+		WHEN zone_total_sec > 0 THEN ROUND((z4_z5_sec::numeric / zone_total_sec) * 100, 0)::int
+		ELSE NULL
+	END AS z4_z5_pct,
+
+	CASE
+		WHEN stream_moving_sec > 0 THEN ROUND((zone_total_sec::numeric / stream_moving_sec) * 100, 0)::int
+		ELSE NULL
+	END AS zone_coverage_pct,
+
+	(zone_total_sec / 3600)::text || ':' ||
+		LPAD(((zone_total_sec % 3600) / 60)::text, 2, '0') AS ride_time_hhmm,
+
+	(z1_z2_sec / 3600)::text || ':' ||
+		LPAD(((z1_z2_sec % 3600) / 60)::text, 2, '0') AS z1_z2_hhmm,
+
+	(z3_sec / 3600)::text || ':' ||
+		LPAD(((z3_sec % 3600) / 60)::text, 2, '0') AS z3_hhmm,
+
+	(z4_z5_sec / 3600)::text || ':' ||
+		LPAD(((z4_z5_sec % 3600) / 60)::text, 2, '0') AS z4_z5_hhmm,
+
+	(z1_sec / 3600)::text || ':' ||
+		LPAD(((z1_sec % 3600) / 60)::text, 2, '0') AS z1_hhmm,
+
+	(z2_sec / 3600)::text || ':' ||
+		LPAD(((z2_sec % 3600) / 60)::text, 2, '0') AS z2_hhmm,
+
+	(z4_sec / 3600)::text || ':' ||
+		LPAD(((z4_sec % 3600) / 60)::text, 2, '0') AS z4_hhmm,
+
+	(z5_sec / 3600)::text || ':' ||
+		LPAD(((z5_sec % 3600) / 60)::text, 2, '0') AS z5_hhmm,
+
+	CASE
+		WHEN zone_total_sec = 0 THEN 'No zone data'
+		WHEN ROUND((z4_z5_sec::numeric / zone_total_sec) * 100, 0)::int > 20 THEN 'High intensity-heavy'
+		WHEN ROUND((z3_sec::numeric / zone_total_sec) * 100, 0)::int > 30 THEN 'Tempo-heavy'
+		WHEN ROUND((z1_z2_sec::numeric / zone_total_sec) * 100, 0)::int < 60 THEN 'Low aerobic share'
+		WHEN ROUND((z1_z2_sec::numeric / zone_total_sec) * 100, 0)::int BETWEEN 60 AND 80
+			 AND ROUND((z3_sec::numeric / zone_total_sec) * 100, 0)::int BETWEEN 10 AND 30
+			 AND ROUND((z4_z5_sec::numeric / zone_total_sec) * 100, 0)::int <= 10 THEN 'Target distribution'
+		WHEN ROUND((z1_z2_sec::numeric / zone_total_sec) * 100, 0)::int > 80
+			 AND ROUND((z4_z5_sec::numeric / zone_total_sec) * 100, 0)::int <= 10 THEN 'Easy-heavy'
+		ELSE 'Review'
+	END AS zone_flag
+FROM calc
+WHERE zone_total_sec > 0;
+
+CREATE TABLE IF NOT EXISTS weekly_audit_item (
+    id BIGSERIAL PRIMARY KEY,
+
+    week_start DATE NOT NULL,
+
+    item_key TEXT NOT NULL,
+    item_label TEXT NOT NULL,
+
+    status TEXT NOT NULL,
+    summary TEXT,
+
+    sort_order INTEGER NOT NULL,
+
+    source TEXT NOT NULL DEFAULT 'computed',
+
+    evidence_json JSONB,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT uq_weekly_audit_item_week_key
+        UNIQUE (week_start, item_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_audit_item_week_start
+ON weekly_audit_item (week_start);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_audit_item_status
+ON weekly_audit_item (status);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_audit_item_key
+ON weekly_audit_item (item_key);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_audit_item_evidence_json
+ON weekly_audit_item
+USING GIN (evidence_json);
+
+CREATE TABLE IF NOT EXISTS weekly_audit (
+    week_start DATE PRIMARY KEY,
+
+    audit_version TEXT NOT NULL DEFAULT 'v1',
+
+    overall_grade TEXT,
+    green_count INTEGER NOT NULL DEFAULT 0,
+    yellow_count INTEGER NOT NULL DEFAULT 0,
+    red_count INTEGER NOT NULL DEFAULT 0,
+
+    audit_summary TEXT,
+    next_week_action TEXT,
+
+    source TEXT NOT NULL DEFAULT 'computed',
+
+    computed_at TIMESTAMPTZ,
+    reviewed_at TIMESTAMPTZ,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_audit_overall_grade
+ON weekly_audit (overall_grade);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_audit_source
+ON weekly_audit (source);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_audit_computed_at
+ON weekly_audit (computed_at);
