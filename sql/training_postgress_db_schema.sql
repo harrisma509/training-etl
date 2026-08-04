@@ -151,6 +151,60 @@ CREATE TABLE public.weekly_training (
 	CONSTRAINT weekly_training_pkey PRIMARY KEY (week_start)
 );
 
+CREATE TABLE IF NOT EXISTS weekly_audit (
+    week_start DATE PRIMARY KEY,
+    audit_version TEXT NOT NULL DEFAULT 'v1',
+    overall_grade TEXT,
+    green_count INTEGER NOT NULL DEFAULT 0,
+    yellow_count INTEGER NOT NULL DEFAULT 0,
+    red_count INTEGER NOT NULL DEFAULT 0,
+    audit_summary TEXT,
+    next_week_action TEXT,
+    source TEXT NOT NULL DEFAULT 'computed',
+    computed_at TIMESTAMPTZ,
+    reviewed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_audit_overall_grade
+ON weekly_audit (overall_grade);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_audit_source
+ON weekly_audit (source);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_audit_computed_at
+ON weekly_audit (computed_at);
+
+CREATE TABLE IF NOT EXISTS weekly_audit_item (
+    id BIGSERIAL PRIMARY KEY,
+    week_start DATE NOT NULL,
+    item_key TEXT NOT NULL,
+    item_label TEXT NOT NULL,
+    status TEXT NOT NULL,
+    summary TEXT,
+    sort_order INTEGER NOT NULL,
+    source TEXT NOT NULL DEFAULT 'computed',
+    evidence_json JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_weekly_audit_item_week_key
+        UNIQUE (week_start, item_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_audit_item_week_start
+ON weekly_audit_item (week_start);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_audit_item_status
+ON weekly_audit_item (status);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_audit_item_key
+ON weekly_audit_item (item_key);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_audit_item_evidence_json
+ON weekly_audit_item
+USING GIN (evidence_json);
+
 
 -- public.strava_activities definition
 

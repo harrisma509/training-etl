@@ -81,3 +81,31 @@ def get_config():
     cfg["AUTO_SYNC_MINUTES"] = int(cfg.get("AUTO_SYNC_MINUTES") or 60)
 
     return Config(cfg)
+
+
+def get_db_config():
+    env_file = os.environ.get("ENV_FILE", "/config/strava.env")
+    file_values = read_env_file(env_file)
+
+    keys = [
+        "WRITE_DB",
+        "DB_HOST",
+        "DB_PORT",
+        "DB_NAME",
+        "DB_USER",
+        "DB_PASSWORD",
+    ]
+
+    cfg = {}
+
+    for key in keys:
+        cfg[key] = os.environ.get(key) or file_values.get(key)
+
+    cfg["WRITE_DB"] = str(cfg.get("WRITE_DB") or "false").lower() == "true"
+    cfg["DB_HOST"] = cfg.get("DB_HOST") or "training-postgres"
+    cfg["DB_PORT"] = cfg.get("DB_PORT") or "5432"
+    cfg["DB_NAME"] = cfg.get("DB_NAME") or "training"
+    cfg["DB_USER"] = cfg.get("DB_USER") or "training_app"
+    cfg["DB_PASSWORD"] = cfg.get("DB_PASSWORD") or ""
+
+    return Config(cfg)

@@ -1,13 +1,23 @@
 import json
+import psycopg
+from psycopg.rows import dict_row
 from weekly_builder import build_weekly_training
 
+
+def connect_db(cfg):
+    return psycopg.connect(
+        host=cfg["DB_HOST"],
+        port=cfg["DB_PORT"],
+        dbname=cfg["DB_NAME"],
+        user=cfg["DB_USER"],
+        password=cfg["DB_PASSWORD"],
+        row_factory=dict_row,
+    )
 
 
 def write_training_to_db(cfg, activities, daily_rows, weekly_rows, warnings, run_at_utc):
     if not cfg.get("WRITE_DB"):
         return
-
-    import psycopg
 
     with psycopg.connect(
         host=cfg["DB_HOST"],
