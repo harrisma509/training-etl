@@ -7,6 +7,22 @@ import psycopg
 from psycopg.rows import dict_row
 from settings import get_config
 
+"""Long-running sync worker for the ETL container.
+
+This module polls the database for manual sync requests and also
+runs automatic sync when enough time has passed since the last
+successful run.
+
+The worker executes `/app/sync_training.py` for the main Strava/
+training rebuild and then executes `/app/compute_weekly_audit.py`
+only after a successful sync.
+
+Because this is a long-lived process inside the sync worker
+container, code changes require restarting the container.
+Weekly audit recompute failures are warnings only and do not
+cause a successful sync request to be marked failed.
+"""
+
 CFG = get_config()
 
 POLL_SECONDS = int(CFG.SYNC_WORKER_POLL_SECONDS)
@@ -114,7 +130,40 @@ def latest_good_sync_age_minutes(conn):
     return (now_utc - last_sync).total_seconds() / 60
 
 
+def run_weekly_audit_recompute(env):
+    # Post-sync audit recompute is separate from the main sync path.
+    # It is allowed to fail without affecting the surrounding sync result.
+    print("Running weekly audit recompute...")
+
+    result = subprocess.run(
+        ["python", "-u", "/app/compute_weekly_audit.py"],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=900,
+    )
+
+    if result.returncode != 0:
+        print("WARNING: weekly audit recompute failed")
+        if result.stdout:
+            print("weekly audit recompute stdout:")
+            print(result.stdout.strip())
+        if result.stderr:
+            print("weekly audit recompute stderr:")
+            print(result.stderr.strip())
+        return
+
+    print("Weekly audit recompute completed")
+    if result.stdout:
+        print(result.stdout.strip())
+    if result.stderr:
+        print(result.stderr.strip())
+
+
 def run_sync(days_back):
+    # Run the ETL sync that refreshes Strava activities and writes
+    # daily_training/weekly_training. Only run audit recompute after
+    # a successful sync_training.py execution.
     env = os.environ.copy()
     env["DAYS_BACK"] = str(days_back)
 
@@ -130,10 +179,13 @@ def run_sync(days_back):
         message = result.stderr.strip() or result.stdout.strip() or "sync_training.py failed"
         raise RuntimeError(message)
 
+    run_weekly_audit_recompute(env)
     return result.stdout.strip()
 
 
 def process_once():
+    # One iteration of polling, with advisory lock guarding against
+    # concurrent worker execution.
     conn = db_conn()
 
     try:
@@ -144,6 +196,7 @@ def process_once():
         pending = get_pending_request(conn)
 
         if pending:
+            # Manual Sync Now path: consume the oldest pending request.
             request_id = pending["id"]
             days_back = pending["days_back"] or DEFAULT_DAYS_BACK
 
@@ -159,6 +212,7 @@ def process_once():
                 print(f"Failed sync_request id={request_id}: {exc}")
             return
 
+        # Automatic sync path: run if no recent successful sync exists.
         age_minutes = latest_good_sync_age_minutes(conn)
 
         if age_minutes is None or age_minutes >= AUTO_SYNC_MINUTES:
@@ -177,6 +231,8 @@ def process_once():
 
 
 def main():
+    # Long-running worker entry point. This process remains alive inside
+    # the container and periodically polls for manual or automatic sync work.
     print(
         f"Sync worker started. Poll={POLL_SECONDS}s, "
         f"auto_sync={AUTO_SYNC_MINUTES}m, days_back={DEFAULT_DAYS_BACK}"
