@@ -7,8 +7,14 @@ config/*.env
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .venv/
 venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Output files
 tmp/
@@ -20,3 +26,4 @@ logs/
 # OS/editor
 .DS_Store
 .vscode/
+.idea/
