@@ -51,3 +51,4 @@ For ETL changes:
 3. Confirm database writes land in the expected tables.
 4. Confirm the web dashboard still loads affected tabs.
 5. Confirm no token, credential, or raw secret-like value is logged.
+sync_worker.py is a long-running container process. Deploying updated files is not enough; restart the sync runner container for code changes to take effect.

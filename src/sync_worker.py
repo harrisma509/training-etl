@@ -22,6 +22,21 @@ container, code changes require restarting the container.
 Weekly audit recompute failures are warnings only and do not
 cause a successful sync request to be marked failed.
 """
+# Sync worker timing:
+# SYNC_WORKER_POLL_SECONDS controls how often this long-running worker wakes up
+# to check for pending manual Sync Now requests and whether an automatic sync is due.
+#
+# AUTO_SYNC_MINUTES controls how old the latest successful sync_run_log entry can be
+# before the worker triggers an automatic sync.
+#
+# Example:
+#   SYNC_WORKER_POLL_SECONDS=60
+#   AUTO_SYNC_MINUTES=60
+#
+# With those settings, the worker checks once per minute, but it only runs an
+# automatic sync when the last successful sync is about 60 minutes old or older.
+# This means "check every 60 seconds" is not the same as "sync every 60 seconds."
+# Manual Sync Now requests are usually picked up within the next polling interval.
 
 CFG = get_config()
 
