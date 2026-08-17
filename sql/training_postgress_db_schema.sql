@@ -295,9 +295,14 @@ CREATE TABLE public.sync_request (
 	started_at_utc timestamptz NULL,
 	completed_at_utc timestamptz NULL,
 	message text NULL,
+	request_type text DEFAULT 'full_sync'::text NOT NULL,
+	activity_id int8 NULL,
+	result_json jsonb NULL,
+	CONSTRAINT ck_sync_request_type_target CHECK ((((request_type = 'full_sync'::text) AND (activity_id IS NULL)) OR ((request_type = 'activity_resync'::text) AND (activity_id IS NOT NULL) AND (activity_id > 0)))),
 	CONSTRAINT sync_request_pkey PRIMARY KEY (id)
 );
 CREATE INDEX idx_sync_request_status_requested ON public.sync_request USING btree (status, requested_at_utc);
+CREATE UNIQUE INDEX ux_sync_request_active_activity_resync ON public.sync_request USING btree (activity_id) WHERE ((request_type = 'activity_resync'::text) AND (status = ANY (ARRAY['pending'::text, 'running'::text])));
 
 
 -- public.sync_run_log definition
