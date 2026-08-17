@@ -1,20 +1,52 @@
 name: training-runner
 
+x-training-etl-common: &training-etl-common
+  build: .
+  environment:
+    ENV_FILE: /config/strava.env
+  volumes:
+    - /volume1/docker/training/etl:/app:ro
+    - /volume1/docker/training/config:/config:ro
+    - /volume1/docker/training/tmp:/tmp:rw
+    - /volume1/docker/training/logs:/logs:rw
+  networks:
+    - training_net
+
 services:
   training-runner:
-    build: .
+    <<: *training-etl-common
     container_name: training-runner
-    restart: unless-stopped
-    environment:
-      ENV_FILE: /config/strava.env
-    volumes:
-      - /volume1/docker/training/etl:/app:ro
-      - /volume1/docker/training/config:/config:ro
-      - /volume1/docker/training/tmp:/tmp:rw
-      - /volume1/docker/training/logs:/logs:rw
-    networks:
-      - training_net
-    command: python -u /app/sync_worker.py
+    restart: "no"
+    command:
+      - python
+      - -u
+      - /app/sync_worker.py
+
+  training-api:
+    <<: *training-etl-common
+    container_name: training-api
+    restart: "no"
+    command:
+      - python
+      - -m
+      - uvicorn
+      - internal_api:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8090"
+    ports:
+      - "8090:8090"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
 
 networks:
   training_net:
