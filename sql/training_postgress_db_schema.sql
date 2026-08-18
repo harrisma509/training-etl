@@ -57,7 +57,30 @@ CREATE SEQUENCE public.weekly_audit_item_id_seq
 	MAXVALUE 9223372036854775807
 	START 1
 	CACHE 1
-	NO CYCLE;-- public.daily_training definition
+	NO CYCLE;-- public.app_settings definition
+
+-- Drop table
+
+-- DROP TABLE public.app_settings;
+
+CREATE TABLE public.app_settings (
+	settings_id int2 NOT NULL, -- Singleton identifier. The only supported value is 1.
+	default_sync_days_back int4 DEFAULT 7 NOT NULL, -- Default number of recent days copied into new full-sync requests. Valid range is 1 through 6000. Existing requests retain their stored days_back value.
+	updated_at timestamptz DEFAULT now() NOT NULL, -- Timestamp of the most recent settings update.
+	CONSTRAINT app_settings_default_sync_days_check CHECK (((default_sync_days_back >= 1) AND (default_sync_days_back <= 6000))),
+	CONSTRAINT app_settings_pkey PRIMARY KEY (settings_id),
+	CONSTRAINT app_settings_singleton_check CHECK ((settings_id = 1))
+);
+COMMENT ON TABLE public.app_settings IS 'Singleton application settings used by the Training Dashboard. Contains non-secret, validated application preferences only.';
+
+-- Column comments
+
+COMMENT ON COLUMN public.app_settings.settings_id IS 'Singleton identifier. The only supported value is 1.';
+COMMENT ON COLUMN public.app_settings.default_sync_days_back IS 'Default number of recent days copied into new full-sync requests. Valid range is 1 through 6000. Existing requests retain their stored days_back value.';
+COMMENT ON COLUMN public.app_settings.updated_at IS 'Timestamp of the most recent settings update.';
+
+
+-- public.daily_training definition
 
 -- Drop table
 

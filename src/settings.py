@@ -1,3 +1,12 @@
+"""ETL runtime settings.
+
+Configuration ownership pattern:
+- Strava credentials, training API tokens, database connection settings, and file output paths remain environment-owned ETL process configuration.
+- DAYS_BACK is the default sync window used by the ETL process, but the effective window for a queued sync is captured into sync_request.days_back when a request is created.
+- AUTO_SYNC_MINUTES and SYNC_WORKER_POLL_SECONDS are scheduler-level process settings that govern the sync worker loop and should not be treated as user-facing app preferences.
+- Browser-facing settings should only expose non-secret operational values whose behavior is intentionally UI-managed and server-validated.
+"""
+
 import os
 from constants import DEFAULT_CHRONIC_C
 

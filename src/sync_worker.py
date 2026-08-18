@@ -57,6 +57,44 @@ def db_conn():
     )
 
 
+def get_default_sync_days_back(conn):
+    fallback_days_back = DEFAULT_DAYS_BACK
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT default_sync_days_back
+                FROM app_settings
+                WHERE settings_id = 1
+                """
+            )
+            row = cur.fetchone()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print("App setting unavailable; using configured default sync days.")
+        return fallback_days_back
+
+    if row is None or row.get("default_sync_days_back") is None:
+        print("App setting unavailable; using configured default sync days.")
+        return fallback_days_back
+
+    try:
+        value = int(row["default_sync_days_back"])
+    except (TypeError, ValueError):
+        print("App setting unavailable; using configured default sync days.")
+        return fallback_days_back
+
+    if value < 1 or value > 6000:
+        print("App setting unavailable; using configured default sync days.")
+        return fallback_days_back
+
+    return value
+
+
 def acquire_lock(conn):
     with conn.cursor() as cur:
         cur.execute("SELECT pg_try_advisory_lock(%s) AS locked", (LOCK_KEY,))
@@ -231,8 +269,9 @@ def process_once():
         age_minutes = latest_good_sync_age_minutes(conn)
 
         if age_minutes is None or age_minutes >= AUTO_SYNC_MINUTES:
-            print(f"Running automatic sync, days_back={DEFAULT_DAYS_BACK}")
-            run_sync(DEFAULT_DAYS_BACK)
+            automatic_days_back = get_default_sync_days_back(conn)
+            print(f"Running automatic sync, days_back={automatic_days_back}")
+            run_sync(automatic_days_back)
             print("Automatic sync completed")
         else:
             print(f"No sync needed. Last good sync was {age_minutes:.1f} minutes ago.")
