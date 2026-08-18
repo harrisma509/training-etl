@@ -108,8 +108,14 @@ CREATE TABLE public.daily_training (
 	other_load_raw numeric NULL,
 	total_load int4 NULL,
 	updated_at timestamptz DEFAULT now() NULL,
+	other_activities jsonb NULL, -- Ordered supporting activities selected by the authoritative Daily ETL builder. Each item contains activity_id, name, and activity_category.
+	CONSTRAINT daily_training_other_activities_array_check CHECK (((other_activities IS NULL) OR (jsonb_typeof(other_activities) = 'array'::text))),
 	CONSTRAINT daily_training_pkey PRIMARY KEY (date)
 );
+
+-- Column comments
+
+COMMENT ON COLUMN public.daily_training.other_activities IS 'Ordered supporting activities selected by the authoritative Daily ETL builder. Each item contains activity_id, name, and activity_category.';
 
 
 -- public.gear definition

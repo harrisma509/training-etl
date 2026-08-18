@@ -50,6 +50,15 @@ def build_daily_training(rows, access_token, chronic_c, gear_display_map=None):
         other_distance_mi = round(sum(activity["distance_mi"] for activity in other_activities), 2)
         other_elevation_ft = round(sum(activity["elevation_ft"] for activity in other_activities))
 
+        other_activities_payload = [
+            {
+                "activity_id": str(activity.get("id")) if activity.get("id") is not None else "",
+                "name": activity.get("name") if activity.get("name") is not None else "",
+                "activity_category": activity.get("activity_category") or "other",
+            }
+            for activity in other_activities
+        ]
+
         other_names = [
             f"{activity['name']} ({activity.get('activity_category', 'other')})"
             for activity in other_activities
@@ -160,6 +169,7 @@ def build_daily_training(rows, access_token, chronic_c, gear_display_map=None):
             "z4_z5_sec": zone["z4_sec"] + zone["z5_sec"],
             "stream_moving_sec": zone["stream_moving_sec"],
             "other_activity_count": len(other_activities),
+            "other_activities": other_activities_payload,
             "other_activity_names": "\n".join(other_names),
             "other_moving_sec": other_moving_sec,
             "other_time": sec_to_hms(other_moving_sec) if other_moving_sec else "",

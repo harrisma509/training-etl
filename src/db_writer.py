@@ -324,6 +324,7 @@ def upsert_daily_training(cur, daily_rows):
             stream_moving_sec,
 
             other_activity_count,
+            other_activities,
             other_activity_names,
             other_time,
             other_miles,
@@ -374,6 +375,7 @@ def upsert_daily_training(cur, daily_rows):
             %(stream_moving_sec)s,
 
             %(other_activity_count)s,
+            %(other_activities)s::jsonb,
             %(other_activity_names)s,
             %(other_time)s,
             %(other_miles)s,
@@ -424,6 +426,7 @@ def upsert_daily_training(cur, daily_rows):
             stream_moving_sec = EXCLUDED.stream_moving_sec,
 
             other_activity_count = EXCLUDED.other_activity_count,
+            other_activities = EXCLUDED.other_activities,
             other_activity_names = EXCLUDED.other_activity_names,
             other_time = EXCLUDED.other_time,
             other_miles = EXCLUDED.other_miles,
@@ -436,7 +439,9 @@ def upsert_daily_training(cur, daily_rows):
     """
 
     for row in daily_rows:
-        cur.execute(sql, row)
+        params = dict(row)
+        params["other_activities"] = json.dumps(params.get("other_activities") or [])
+        cur.execute(sql, params)
 
 
 def upsert_weekly_training(cur, weekly_rows):

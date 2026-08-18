@@ -33,6 +33,407 @@ The separate `training-web` repo owns:
 
 Schema changes in this repo must be validated against the web app before deploy.
 
+## Internal ETL API
+
+### Purpose
+
+The training-api service provides a narrow synchronous HTTP boundary around existing ETL operations. It exists so callers do not need to mount ETL source into training-web, install ETL dependencies in training-web, expose Strava credentials to training-web, or use SSH, Docker socket access, docker exec, or subprocess execution from the web app.
+
+Current flow:
+
+training-web or trusted administrative client
+→ training-api
+→ existing ETL function
+→ Strava and PostgreSQL
+→ sanitized JSON result
+
+This API is intentionally small and reuses the authoritative ETL logic instead of duplicating it.
+
+### Service ownership
+
+training-runner:
+- scheduled synchronization
+- existing Sync Now processing
+- background worker behavior
+
+training-api:
+- synchronous ETL HTTP operations
+- token-protected internal endpoints
+- direct reuse of existing ETL functions
+- sanitized JSON responses
+
+training-web:
+- browser-facing UI and routes
+- future server-side proxy to training-api
+- no direct Strava or ETL write logic
+
+### Non-negotiable implementation rule
+
+API handlers must call an existing authoritative ETL function.
+
+API handlers must not reproduce, copy, fork, or independently implement:
+
+- Strava fetching
+- activity normalization
+- activity comparison
+- database writes
+- Daily rebuilding
+- Weekly rebuilding
+- load calculation
+- gear calculations
+- service-event behavior
+
+If an ETL operation does not already exist as a callable function, the function must be implemented and validated first. Only then is it exposed through the API.
+
+### Authentication
+
+The current internal API uses the required header:
+
+X-Internal-Token
+
+The expected value comes from `TRAINING_API_TOKEN` and is loaded through the existing `ENV_FILE` configuration path. Comparison uses `hmac.compare_digest`.
+
+Important rules:
+- the token must be a long random value
+- the token must not be committed to Git
+- the token must not appear in URLs
+- the token must not be sent to browser JavaScript
+- the token must not be logged
+- missing or invalid authentication returns HTTP 401
+- the API refuses to start if `TRAINING_API_TOKEN` is missing or blank
+
+Do not include a real token in documentation.
+
+### Health endpoint
+
+GET /health
+
+Authentication:
+- none
+
+Purpose:
+- confirm Uvicorn and the FastAPI application can answer requests
+- support container health monitoring
+
+Current response:
+
+```json
+{
+  "status": "ok",
+  "service": "training-api"
+}
+```
+
+The health endpoint does not:
+
+- call Strava
+- query PostgreSQL
+- validate credentials
+- expose configuration
+- prove that an activity resync will succeed
+
+### Activity-resync endpoint
+
+POST /internal/activities/{activity_id}/resync
+
+Authentication:
+- `X-Internal-Token: <configured token>`
+
+Input rules:
+- `activity_id` is supplied in the URL path
+- positive decimal integer only
+- no request body is required
+- no arbitrary command name is accepted
+- no caller-provided script, URL, SQL, filesystem path, or CLI argument is accepted
+
+Execution:
+- call `resync_activity(CFG, activity_id)`
+- wait synchronously for completion
+- return its sanitized result
+
+Side effects may include:
+- refreshing one Strava activity
+- updating `strava_activities`
+- rebuilding complete affected Daily dates
+- deleting an emptied old Daily date
+- rebuilding Weekly only for training-impacting changes
+
+The endpoint does not invent training load or rewrite service events.
+
+### Success response
+
+The current success response is the existing sanitized dictionary returned by the ETL function. Current fields include:
+
+- status
+- activity_id
+- activity_name
+- changed_fields
+- old_date
+- new_date
+- rebuilt_dates
+- deleted_daily_dates
+- daily_rebuilt
+- weekly_rebuilt
+- weekly_rows_rebuilt
+- weekly_skip_reason
+- old_gear_id
+- new_gear_id
+- old_bike_name
+- new_bike_name
+- warnings
+- elapsed_seconds
+
+Notes:
+- additional safe fields may be added later
+- callers should not depend on JSON property order
+- `changed_fields` is the authoritative change classification
+- `daily_rebuilt` reports whether Daily was written
+- `weekly_rebuilt` reports whether Weekly was written
+- `rebuilt_dates` identifies Daily dates rebuilt
+- `deleted_daily_dates` identifies stale old Daily dates removed
+- `warnings` reports nonfatal conditions
+
+Example sanitized response:
+
+```json
+{
+  "status": "success",
+  "activity_id": 19767854251,
+  "activity_name": "Deer Creeks",
+  "changed_fields": ["name"],
+  "old_date": "2026-08-16",
+  "new_date": "2026-08-16",
+  "rebuilt_dates": ["2026-08-16"],
+  "deleted_daily_dates": [],
+  "daily_rebuilt": true,
+  "weekly_rebuilt": false,
+  "weekly_rows_rebuilt": 0,
+  "weekly_skip_reason": "gear-only or metadata-only change",
+  "old_gear_id": "abc123",
+  "new_gear_id": "abc123",
+  "old_bike_name": "Road Bike",
+  "new_bike_name": "Road Bike",
+  "warnings": [],
+  "elapsed_seconds": 2.123
+}
+```
+
+### No-change response
+
+An already-current activity normally returns a success payload with no real change, for example:
+
+```json
+{
+  "status": "success",
+  "activity_id": 18512036019,
+  "changed_fields": [],
+  "rebuilt_dates": [],
+  "daily_rebuilt": false,
+  "weekly_rebuilt": false,
+  "weekly_rows_rebuilt": 0,
+  "weekly_skip_reason": "no training-impacting change"
+}
+```
+
+This is expected idempotent behavior: the ETL checks the live Strava record, sees no training-impacting difference, and returns a no-op result.
+
+### Error contract
+
+Current HTTP behavior:
+
+HTTP 400:
+- invalid activity ID
+
+HTTP 401:
+- missing or invalid `X-Internal-Token`
+
+HTTP 500:
+- `resync_activity()` raised an exception
+- response remains generic and sanitized
+
+Representative response shapes:
+
+```json
+{
+  "status": "error",
+  "error": "Invalid activity id"
+}
+```
+
+```json
+{
+  "status": "error",
+  "error": "Unauthorized"
+}
+```
+
+```json
+{
+  "status": "error",
+  "activity_id": 19767854251,
+  "error": "Resync failed"
+}
+```
+
+The API does not expose exception text, stack traces, credentials, tokens, PostgreSQL connection details, raw Strava payloads, or internal filesystem paths.
+
+Future Improvements:
+- 404 for unknown local activity IDs
+- 409 for duplicate in-flight requests if a guard is added later
+- 503 or 504 for external dependency or timeout issues, if the API later adds explicit timeout handling
+
+### Timeouts
+
+The direct training-api endpoint does not currently impose an application-level timeout in the code path inspected here. Current operational guidance is to use a bounded client timeout at the caller boundary, for example `curl --max-time 35` during manual validation.
+
+Important notes:
+- a future training-web proxy should use a bounded timeout
+- timeout policy belongs at the calling boundary unless a future API-specific mechanism is added
+- callers must not assume a guaranteed two-second response time
+- proven calls have varied from approximately two to six seconds
+
+### Concurrency
+
+Current behavior is intentionally simple:
+
+- `resync_activity()` keeps its PostgreSQL transaction and advisory-lock safety
+- the API does not currently provide a queue
+- the API does not currently use `sync_request`
+- the API does not currently poll
+- the API waits synchronously
+- browser or proxy duplicate-click handling is future work unless a guard is added later
+
+The API is a direct synchronous boundary around the ETL function, not a background-processing framework.
+
+### Curl examples
+
+Health check:
+
+```bash
+curl -sS http://<training-api-host>:8090/health | python3 -m json.tool
+```
+
+Unauthorized resync request:
+
+```bash
+curl -sS -D - \
+  -X POST \
+  http://<training-api-host>:8090/internal/activities/19767854251/resync
+```
+
+Authorized resync request using a shell environment variable:
+
+```bash
+read -s TRAINING_API_TOKEN
+export TRAINING_API_TOKEN
+
+curl --max-time 35 -sS \
+  -X POST \
+  -H "X-Internal-Token: $TRAINING_API_TOKEN" \
+  http://<training-api-host>:8090/internal/activities/<activity_id>/resync \
+  | python3 -m json.tool
+```
+
+Clear the token after testing:
+
+```bash
+unset TRAINING_API_TOKEN
+```
+
+When entering the token, paste only the token value. Do not paste the surrounding quotes used in `strava.env`.
+
+### Container and deployment notes
+
+The current runtime is split between two containers in the same Compose project:
+
+- `training-runner`: runs the scheduled ETL worker and normal sync automation
+- `training-api`: runs FastAPI/Uvicorn for the internal synchronous API
+
+Both services use the same ETL image, source, dependencies, configuration, and private Docker network.
+
+Relevant Compose behavior currently in place:
+
+- `training-runner` executes `python -u /app/sync_worker.py`
+- `training-api` executes `python -m uvicorn internal_api:app --host 0.0.0.0 --port 8090`
+- the ETL source is mounted read-only at `/app`
+- protected configuration is mounted read-only at `/config`
+- settings are loaded from `/config/strava.env` via `ENV_FILE`
+
+Operational distinctions:
+- Python source change → deploy source and restart the affected container
+- `strava.env` change → restart the affected container
+- Dockerfile or requirements change → rebuild image and recreate affected services
+- Compose command, port, volume, or health-check change → recreate service or project
+- simple stop/start does not apply changed Compose configuration
+
+Manual project-level stop affects both `training-runner` and `training-api`.
+
+### Health-check behavior
+
+The current health-check contract is:
+
+- GET /health
+- periodic Docker check
+- container can transition from unhealthy back to healthy after later successful checks
+- an unhealthy status does not necessarily mean the Uvicorn process exited
+- restart policy responds to process exit, not merely to failing health checks
+
+Current confirmed health-check values from the Compose file:
+
+- interval = 5 minutes
+- timeout = 10 seconds
+- retries = 3
+- start_period = 90 seconds
+
+### Future training-web integration
+
+The intended boundary is:
+
+trusted LAN browser
+→ training-web POST route
+→ server-side internal API token
+→ training-api
+→ resync_activity()
+
+Rules for that future integration:
+- browser JavaScript must never receive `TRAINING_API_TOKEN`
+- training-web should provide a thin server-side proxy
+- proxy must validate the activity ID
+- proxy must impose a bounded timeout
+- proxy should prevent duplicate in-flight calls
+- proxy must return sanitized responses
+- proxy must not duplicate ETL logic
+- user authentication and CSRF protection are required before exposing the web application publicly
+
+training-web is currently LAN-only and the proxy is not yet implemented.
+
+### Validation record
+
+The service has been proven with:
+
+- successful health check
+- failed authentication returning HTTP 401
+- authenticated no-change activity resync
+- authenticated name-only activity change
+- Daily selective rebuild
+- Weekly selective skip
+- second-call idempotency
+
+### Future API design rules
+
+Future handlers should adhere to these rules:
+
+- expose narrow operations, not generic command execution
+- prefer path and typed parameters over arbitrary command payloads
+- validate input at the HTTP boundary
+- call an existing ETL function
+- keep data-write transactions inside ETL functions
+- return sanitized structured JSON
+- never return credentials, raw environment values, stack traces, SQL, or raw source payloads
+- add authentication to every mutating endpoint
+- add an endpoint only when the operation has a clear owner and testable contract
+- do not turn training-api into a generic administration shell
+
 ## Security rules
 
 - Do not commit real Strava tokens
