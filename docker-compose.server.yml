@@ -1,0 +1,56 @@
+name: training-etl
+
+x-training-etl-common: &training-etl-common
+  build:
+    context: .
+  environment:
+    ENV_FILE: /config/strava.env
+  volumes:
+    - /opt/training/etl:/app:ro
+    - /etc/training/strava.env:/config/strava.env:ro
+    - /opt/training/tmp:/tmp:rw
+    - /opt/training/logs:/logs:rw
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  networks:
+    - training_net
+
+services:
+  training-runner:
+    <<: *training-etl-common
+    container_name: training-runner
+    restart: "no"
+    command:
+      - python
+      - -u
+      - /app/sync_worker.py
+
+  training-api:
+    <<: *training-etl-common
+    container_name: training-api
+    restart: "no"
+    command:
+      - python
+      - -m
+      - uvicorn
+      - internal_api:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8090"
+    ports:
+      - "8090:8090"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3)"
+      interval: 5m
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+networks:
+  training_net:
+    external: true
