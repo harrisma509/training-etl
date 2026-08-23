@@ -14,10 +14,14 @@ orchestration layer.
 This refactor is intended to preserve existing behavior.
 """
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from db_writer import connect_db
+from logging_config import configure_logging
 from settings import get_db_config
+
+logger = logging.getLogger(__name__)
 from weekly_audit_queries import (
     fetch_weekly_training,
     fetch_weekly_zone_summary,
@@ -49,7 +53,7 @@ def main():
         with conn.cursor() as cur:
             weekly_rows = fetch_weekly_training(cur)
             if not weekly_rows:
-                print("No weekly_training rows found; nothing to audit.")
+                logger.info("No weekly_training rows found; nothing to audit.")
                 return
 
             zone_rows = fetch_weekly_zone_summary(cur)
@@ -94,7 +98,7 @@ def main():
 
             conn.commit()
 
-    print(f"Weekly audit ETL completed for {weeks} weeks")
+    logger.info("Weekly audit ETL completed for %s weeks", weeks)
 
 
 def get_week_dates(week_start):
@@ -102,8 +106,9 @@ def get_week_dates(week_start):
 
 
 if __name__ == "__main__":
+    configure_logging("training-runner-audit")
     try:
         main()
-    except Exception as exc:
-        print(f"ERROR: {exc}")
+    except Exception:
+        logger.exception("Weekly audit ETL failed")
         raise

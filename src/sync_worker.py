@@ -1,11 +1,15 @@
+import logging
 import os
-import time
 import subprocess
+import time
 from datetime import datetime, timezone
 
 import psycopg
 from psycopg.rows import dict_row
+from logging_config import configure_logging
 from settings import get_config
+
+logger = logging.getLogger(__name__)
 
 """Long-running sync worker for the ETL container.
 
@@ -75,21 +79,21 @@ def get_default_sync_days_back(conn):
             conn.rollback()
         except Exception:
             pass
-        print("App setting unavailable; using configured default sync days.")
+        logger.warning("App setting unavailable; using configured default sync days.")
         return fallback_days_back
 
     if row is None or row.get("default_sync_days_back") is None:
-        print("App setting unavailable; using configured default sync days.")
+        logger.warning("App setting unavailable; using configured default sync days.")
         return fallback_days_back
 
     try:
         value = int(row["default_sync_days_back"])
     except (TypeError, ValueError):
-        print("App setting unavailable; using configured default sync days.")
+        logger.warning("App setting unavailable; using configured default sync days.")
         return fallback_days_back
 
     if value < 1 or value > 6000:
-        print("App setting unavailable; using configured default sync days.")
+        logger.warning("App setting unavailable; using configured default sync days.")
         return fallback_days_back
 
     return value
@@ -186,7 +190,7 @@ def latest_good_sync_age_minutes(conn):
 def run_weekly_audit_recompute(env):
     # Post-sync audit recompute is separate from the main sync path.
     # It is allowed to fail without affecting the surrounding sync result.
-    print("Running weekly audit recompute...")
+    logger.info("Running weekly audit recompute...")
 
     result = subprocess.run(
         ["python", "-u", "/app/compute_weekly_audit.py"],
@@ -197,20 +201,18 @@ def run_weekly_audit_recompute(env):
     )
 
     if result.returncode != 0:
-        print("WARNING: weekly audit recompute failed")
+        logger.warning("Weekly audit recompute failed: exit_code=%s", result.returncode)
         if result.stdout:
-            print("weekly audit recompute stdout:")
-            print(result.stdout.strip())
+            logger.debug("Weekly audit recompute stdout summary: %s", result.stdout.strip()[:500])
         if result.stderr:
-            print("weekly audit recompute stderr:")
-            print(result.stderr.strip())
+            logger.debug("Weekly audit recompute stderr summary: %s", result.stderr.strip()[:500])
         return
 
-    print("Weekly audit recompute completed")
+    logger.info("Weekly audit recompute completed")
     if result.stdout:
-        print(result.stdout.strip())
+        logger.debug("Weekly audit recompute stdout summary: %s", result.stdout.strip()[:500])
     if result.stderr:
-        print(result.stderr.strip())
+        logger.debug("Weekly audit recompute stderr summary: %s", result.stderr.strip()[:500])
 
 
 def run_sync(days_back):
@@ -243,7 +245,7 @@ def process_once():
 
     try:
         if not acquire_lock(conn):
-            print("Another sync is already running; skipping.")
+            logger.info("Another sync is already running; skipping.")
             return
 
         pending = get_pending_request(conn)
@@ -253,16 +255,16 @@ def process_once():
             request_id = pending["id"]
             days_back = pending["days_back"] or DEFAULT_DAYS_BACK
 
-            print(f"Processing sync_request id={request_id}, days_back={days_back}")
+            logger.info("Processing sync_request id=%s, days_back=%s", request_id, days_back)
             mark_request_running(conn, request_id)
 
             try:
                 run_sync(days_back)
                 mark_request_completed(conn, request_id)
-                print(f"Completed sync_request id={request_id}")
+                logger.info("Completed sync_request id=%s", request_id)
             except Exception as exc:
                 mark_request_failed(conn, request_id, str(exc))
-                print(f"Failed sync_request id={request_id}: {exc}")
+                logger.error("Failed sync_request id=%s: %s", request_id, exc)
             return
 
         # Automatic sync path: run if no recent successful sync exists.
@@ -270,11 +272,11 @@ def process_once():
 
         if age_minutes is None or age_minutes >= AUTO_SYNC_MINUTES:
             automatic_days_back = get_default_sync_days_back(conn)
-            print(f"Running automatic sync, days_back={automatic_days_back}")
+            logger.info("Running automatic sync, days_back=%s", automatic_days_back)
             run_sync(automatic_days_back)
-            print("Automatic sync completed")
+            logger.info("Automatic sync completed")
         else:
-            print(f"No sync needed. Last good sync was {age_minutes:.1f} minutes ago.")
+            logger.debug("No sync needed. Last good sync was %.1f minutes ago.", age_minutes)
 
     finally:
         try:
@@ -287,19 +289,17 @@ def process_once():
 def main():
     # Long-running worker entry point. This process remains alive inside
     # the container and periodically polls for manual or automatic sync work.
-    print(
-        f"Sync worker started. Poll={POLL_SECONDS}s, "
-        f"auto_sync={AUTO_SYNC_MINUTES}m, days_back={DEFAULT_DAYS_BACK}"
-    )
+    logger.info("Sync worker started. Poll=%ss, auto_sync=%sm, days_back=%s", POLL_SECONDS, AUTO_SYNC_MINUTES, DEFAULT_DAYS_BACK)
 
     while True:
         try:
             process_once()
-        except Exception as exc:
-            print(f"Sync worker error: {exc}")
+        except Exception:
+            logger.exception("Sync worker error")
 
         time.sleep(POLL_SECONDS)
 
 
 if __name__ == "__main__":
+    configure_logging("training-runner")
     main()

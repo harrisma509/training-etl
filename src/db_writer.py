@@ -1,7 +1,11 @@
 import json
+import logging
+
 import psycopg
 from psycopg.rows import dict_row
 from weekly_builder import build_weekly_training
+
+logger = logging.getLogger(__name__)
 
 
 def connect_db(cfg):
@@ -28,18 +32,17 @@ def write_training_to_db(cfg, activities, daily_rows, weekly_rows, warnings, run
     ) as conn:
         with conn.cursor() as cur:
 
-            print("DB write: activities")
+            logger.info("DB write: activities")
             upsert_strava_activities(cur, activities)
 
-            print("DB write: daily")
+            logger.info("DB write: daily")
             upsert_daily_training(cur, daily_rows)
-            print("DB rebuild: weekly from full daily_training")
+            logger.info("DB rebuild: weekly from full daily_training")
             all_daily_rows = fetch_all_daily_training_for_weekly(cur)
             weekly_rows = build_weekly_training(all_daily_rows)
             replace_weekly_training(cur, weekly_rows)
 
-
-            print("DB write: sync log")
+            logger.info("DB write: sync log")
 
             insert_sync_run_log(
                 cur=cur,
