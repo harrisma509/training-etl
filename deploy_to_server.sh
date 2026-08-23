@@ -20,9 +20,10 @@ if ! ssh "$SERVER" "test -d '$SERVER_ETL_DIR'"; then
   exit 1
 fi
 
-echo "Deploying ETL Python files to HarrisServer..."
+echo "Deploying ETL files and scripts to HarrisServer..."
 
-rsync -av --delete \
+# -p preserves file permissions so backup_postgres.sh stays executable
+rsync -avp --delete \
   --exclude "__pycache__/" \
   --exclude "*.pyc" \
   --exclude ".DS_Store" \
