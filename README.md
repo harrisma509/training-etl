@@ -33,6 +33,293 @@ The separate `training-web` repo owns:
 
 Schema changes in this repo must be validated against the web app before deploy.
 
+## HarrisServer operations, logging, and alerting
+
+The production ETL platform runs on `harrisserver` with native PostgreSQL and Dockerized application services. Operational monitoring is intentionally independent of PostgreSQL where possible so the system can report a database outage rather than depending on the failed database to store alert state.
+
+### Production runtime
+
+- Host: `harrisserver`
+- Operating system: Ubuntu Server 26.04 LTS
+- Database: native PostgreSQL 18.6
+- Docker services:
+  - `training-runner`
+  - `training-web` in the separate `training-web` project
+  - `training-api` is defined for future or controlled deployment
+- Shared Docker network: `training_net`
+- PostgreSQL is available to containers through `host.docker.internal`
+- HarrisNAS backup storage is mounted through NFS at `/mnt/harrisnas/backups`
+
+### Operational files
+
+Deployed ETL and monitoring code:
+
+```text
+/opt/training/etl/
+├── backup_postgres.sh
+├── backup_test_latest_postgres.sh
+├── send_alert.py
+├── alert_manager.py
+├── check_system_health.py
+└── weekly_health_report.py
+```
+
+Protected configuration:
+
+```text
+/etc/training/
+├── .env
+├── strava.env
+└── alert.env
+```
+
+Persistent state and logs:
+
+```text
+/opt/training/state/
+└── alert_state.json
+
+/opt/training/logs/
+├── pg_backup.log
+├── pg_restore_test.log
+├── training_restore_output.log
+├── health_check.log
+└── weekly_health.log
+```
+
+Runtime lock:
+
+```text
+/run/lock/training_restore_test.lock
+```
+
+Secrets must remain outside Git and outside `/opt/training`. Current secret files are owned by `root`, grouped to `mike`, and use mode `640`.
+
+### Logging model
+
+Python monitoring components use the standard-library `logging` framework with timestamp, severity, logger name, and message. The application containers continue writing logs to stdout and stderr so Docker and Portainer can collect them.
+
+The two PostgreSQL maintenance jobs are Bash scripts and use Bash-native error handling rather than Python logging:
+
+- `set -Eeuo pipefail`
+- nonzero process exit codes
+- `ERR` and `EXIT` traps
+- stdout and stderr redirected by cron
+- failure-only email through `send_alert.py`
+
+A failed email attempt must never hide or replace the original backup or restore failure. Successful backup and restore jobs do not send routine email.
+
+### Gmail alert transport
+
+`send_alert.py` is the single email transport used by the monitoring framework. It:
+
+- reads `/etc/training/alert.env`
+- connects to Gmail SMTP using STARTTLS
+- authenticates with a Gmail App Password
+- sends alerts to the configured recipient
+- returns exit code `0` after Gmail accepts the message
+- returns nonzero after a configuration, authentication, network, or SMTP failure
+- never prints or logs the App Password
+
+The sender display name is formatted as `Harris Server` while the authenticated sender remains the configured Gmail address.
+
+Expected variables in `/etc/training/alert.env`:
+
+```text
+SMTP_HOST
+SMTP_PORT
+SMTP_USER
+SMTP_APP_PASSWORD
+ALERT_FROM
+ALERT_FROM_NAME
+ALERT_TO
+```
+
+Do not commit real values or paste them into logs, issues, documentation, or chat transcripts.
+
+### Incident state and deduplication
+
+`alert_manager.py` stores incident state at:
+
+```text
+/opt/training/state/alert_state.json
+```
+
+State is stored locally rather than in PostgreSQL so PostgreSQL outages can still be reported. The manager provides:
+
+- one email when a new incident opens
+- duplicate suppression for six hours
+- a reminder after the cooldown if the incident remains active
+- one recovery email for critical incidents
+- silent recovery for lower-severity incidents
+- atomic JSON file replacement
+- file locking to prevent concurrent state corruption
+- sanitized summaries with no credentials or connection strings
+
+Typical command examples:
+
+```bash
+sudo /opt/training/etl/alert_manager.py list
+
+sudo /opt/training/etl/alert_manager.py fail \
+  --key test_incident \
+  --severity warning \
+  --summary "Controlled alert-manager test"
+
+sudo /opt/training/etl/alert_manager.py recover \
+  --key test_incident \
+  --summary "Controlled test completed"
+```
+
+### Nightly PostgreSQL backup
+
+`backup_postgres.sh`:
+
+- verifies that `/mnt/harrisnas/backups` is mounted
+- reads database credentials from `/etc/training/.env`
+- creates a compressed SQL backup named `pg_training_YYYYMMDD_HHMMSS.sql.gz`
+- validates gzip integrity
+- retains backups for 14 days
+- unsets `PGPASSWORD` during cleanup
+- sends one failure email and no success email
+
+The production backup has been tested successfully and its failure alert was validated using an intentionally invalid mount path without modifying production data.
+
+### Monthly restore validation
+
+`backup_test_latest_postgres.sh`:
+
+- selects the newest PostgreSQL backup
+- validates gzip integrity
+- creates the disposable database `training_restore_test`
+- restores the complete SQL backup with `ON_ERROR_STOP=1`
+- validates required tables
+- validates that core tables are nonempty
+- prints key row counts and restored database size
+- drops the disposable database on success or failure
+- sends one failure email and no success email
+
+The restore test must run as root because the script switches to the `postgres` operating-system user for database creation, restore, validation, and cleanup. The production `training` database is never a permitted restore-test target.
+
+The backup and restore process has been proven end to end with a restored database size of approximately 14 MB and validated activity, Daily, Weekly, Steps, and sync-request rows.
+
+### Hourly system health check
+
+`check_system_health.py` runs as root and remains silent by email when healthy. It currently checks:
+
+- PostgreSQL accepts connections on `127.0.0.1:5432`
+- `training-web` is running
+- `training-runner` is running
+- HarrisNAS backup storage is mounted through NFS
+- the newest backup is nonempty and less than 26 hours old
+- root filesystem usage is below 85 percent
+- `nut-monitor.service` is active
+- the latest successful automatic sync in `sync_run_log` is less than three hours old
+- no `sync_request` row has remained `pending` or `running` for more than 30 minutes
+
+The health checker uses `alert_manager.py` to open, suppress, remind, and recover incidents. It does not restart services or modify application data.
+
+Manual check:
+
+```bash
+sudo /opt/training/etl/check_system_health.py
+```
+
+A healthy result exits with status `0`. One or more failed checks exit with status `1`. Framework-level execution failure exits with status `2`.
+
+### Weekly health summary
+
+`weekly_health_report.py` sends one Sunday operational summary and supports a no-email preview:
+
+```bash
+sudo /opt/training/etl/weekly_health_report.py --dry-run
+sudo /opt/training/etl/weekly_health_report.py
+```
+
+The report includes:
+
+- overall `HEALTHY` or `ATTENTION NEEDED` status
+- `✅ PASS` and `❌ FAIL` platform-health lines
+- PostgreSQL version and database size
+- Activities, Daily, and Weekly row counts
+- successful and non-OK sync runs during the last seven days
+- latest successful sync and warning count
+- stuck sync-request count
+- freshness of Steps, Weight, Sleep, HRV, resting heart rate, and VO2 max
+- newest backup name, age, size, and retained backup count
+- latest recorded restore-validation result
+- active incidents from `alert_state.json`
+
+The weekly report observes current health but does not open or recover incidents. The hourly health checker owns incident lifecycle.
+
+### Production schedules
+
+Mike's user crontab runs the nightly backup:
+
+```cron
+0 2 * * * /opt/training/etl/backup_postgres.sh >> /opt/training/logs/pg_backup.log 2>&1
+```
+
+Root's crontab runs privileged monitoring and restore validation:
+
+```cron
+5 * * * * /opt/training/etl/check_system_health.py >> /opt/training/logs/health_check.log 2>&1
+0 3 1-7 * 0 /opt/training/etl/backup_test_latest_postgres.sh >> /opt/training/logs/pg_restore_test.log 2>&1
+0 8 * * 0 /opt/training/etl/weekly_health_report.py >> /opt/training/logs/weekly_health.log 2>&1
+```
+
+Schedule meaning:
+
+- every day at 2:00 AM: create the PostgreSQL backup
+- five minutes after every hour: run silent health checks
+- first Sunday of each month at 3:00 AM: restore and validate the newest backup
+- every Sunday at 8:00 AM: send the weekly health summary
+
+### Alert policy
+
+Immediate email is reserved for actionable failures, including:
+
+- PostgreSQL unavailable
+- application container stopped
+- HarrisNAS backup mount missing
+- backup stale or empty
+- root disk above threshold
+- NUT monitor inactive
+- automatic sync stale
+- sync request stuck
+- backup job failed
+- restore validation failed
+
+Routine healthy checks do not send email. Most healthy weeks should produce exactly one email: the Sunday summary.
+
+### Current validation record
+
+The operations framework has been manually proven with:
+
+- successful Gmail SMTP delivery
+- sender display name `Harris Server`
+- successful PostgreSQL backup with no success email
+- controlled backup failure with one email alert
+- successful full restore validation with no success email
+- controlled restore-test failure with one email alert
+- alert open, duplicate suppression, and recovery tests
+- hourly health-check detection of a stopped runner
+- automatic recovery of corrected false incidents
+- weekly-report dry run showing healthy and failed states
+- all nine current health checks passing after schema corrections
+
+### Remaining observability work
+
+Future work should stay narrow and staged:
+
+- add log rotation for persistent operational logs
+- standardize Python `logging` inside `training-runner`, `training-web`, and health-ingest routes
+- add contextual application alerts only after normal retries are exhausted
+- distinguish persistent Strava authentication failures from transient network errors
+- preserve the current policy of no daily healthy emails
+
+Do not add Sentry, Prometheus, Grafana, or another monitoring platform unless a measured need justifies the added operational complexity.
+
 ## Internal ETL API
 
 ### Purpose

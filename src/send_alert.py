@@ -6,6 +6,7 @@ import smtplib
 import socket
 import sys
 from email.message import EmailMessage
+from email.utils import formataddr
 from pathlib import Path
 
 
@@ -56,7 +57,8 @@ def send_alert(subject: str, body: str, env_file: str = DEFAULT_ENV_FILE) -> Non
 
     message = EmailMessage()
     message["Subject"] = subject
-    message["From"] = config["ALERT_FROM"]
+    from_name = config.get("ALERT_FROM_NAME", "Harris Server")
+    message["From"] = formataddr((from_name, config["ALERT_FROM"]))
     message["To"] = config["ALERT_TO"]
     message.set_content(body)
 
