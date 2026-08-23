@@ -740,3 +740,12 @@ For ETL changes:
 4. Confirm the web dashboard still loads affected tabs.
 5. Confirm no token, credential, or raw secret-like value is logged.
 sync_worker.py is a long-running container process. Deploying updated files is not enough; restart the sync runner container for code changes to take effect.
+
+## Current log-management layers
+/opt/training/logs/*.log
+→ Linux logrotate
+→ weekly, 8 copies, gzip, 10 MB maximum
+
+Docker container stdout/stderr
+→ Docker json-file rotation
+→ 10 MB per file, 5 files per container

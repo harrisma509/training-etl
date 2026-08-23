@@ -2,7 +2,7 @@ name: training-etl
 
 x-training-etl-common: &training-etl-common
   build:
-    context: .
+    context: /opt/training/etl-build
   environment:
     ENV_FILE: /config/strava.env
   volumes:
@@ -14,12 +14,17 @@ x-training-etl-common: &training-etl-common
     - "host.docker.internal:host-gateway"
   networks:
     - training_net
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
 
 services:
   training-runner:
     <<: *training-etl-common
     container_name: training-runner
-    restart: "no"
+    restart: unless-stopped
     command:
       - python
       - -u
@@ -28,7 +33,7 @@ services:
   training-api:
     <<: *training-etl-common
     container_name: training-api
-    restart: "no"
+    restart: unless-stopped
     command:
       - python
       - -m
