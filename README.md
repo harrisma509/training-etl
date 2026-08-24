@@ -749,3 +749,60 @@ sync_worker.py is a long-running container process. Deploying updated files is n
 Docker container stdout/stderr
 → Docker json-file rotation
 → 10 MB per file, 5 files per container
+
+# HarrisServer Logging and Alerting
+
+## Overview
+
+HarrisServer uses separate but complementary layers for application logging, operational logging, health monitoring, and email alerting.
+
+The design goals are:
+
+- Keep healthy operation quiet
+- Preserve useful diagnostic details
+- Send email only for actionable failures
+- Prevent duplicate alert emails
+- Keep monitoring functional when PostgreSQL is unavailable
+- Prevent log files from growing indefinitely
+- Avoid logging credentials, tokens, health payloads, or other secrets
+
+## Architecture
+
+```text
+training-web and training-runner
+        |
+        | Python standard logging
+        v
+Docker stdout and stderr
+        |
+        | Docker json-file rotation
+        v
+Portainer and docker logs
+
+
+Cron and maintenance jobs
+        |
+        | stdout and stderr
+        v
+/opt/training/logs
+        |
+        | Linux logrotate
+        v
+Compressed historical logs
+
+
+Health checks and operational failures
+        |
+        v
+alert_manager.py
+        |
+        | Local incident state
+        v
+/opt/training/state/alert_state.json
+        |
+        v
+send_alert.py
+        |
+        | Gmail SMTP with App Password
+        v
+Operations email recipient
