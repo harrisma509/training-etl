@@ -40,6 +40,17 @@ The production ETL platform runs on `harrisserver` with native PostgreSQL and Do
 ### Production runtime
 
 - Host: `harrisserver`
+HP EliteDesk 800 G5 Desktop Mini
+Intel Core i5-9500T
+6 physical cores
+2.20 GHz base clock
+16 GiB DDR4-2667
+One dual-rank DIMM
+One open memory slot
+SK hynix PC601 NVMe SSD
+Intel I219-LM Ethernet
+Intel Wi-Fi 6 AX200
+BIOS dated May 5, 2026
 - Operating system: Ubuntu Server 26.04 LTS
 - Database: native PostgreSQL 18.6
 - Docker services:
