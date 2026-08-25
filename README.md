@@ -1,6 +1,6 @@
 # Training ETL
 
-Python ETL project for the Training Dashboard.
+Python ETL project for the Training Web App.
 
 ## Current scope
 
