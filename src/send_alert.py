@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 
+# Test on HarrisServer:
+# cd /opt/training/etl
+# python3 send_alert.py \
+#   --subject "TEST: HarrisServer alert" \
+#   --body "This is a test of the HarrisServer email alert pipeline."
+
 import argparse
 import os
 import smtplib
