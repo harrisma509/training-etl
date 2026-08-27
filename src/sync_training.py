@@ -8,7 +8,6 @@ from logging_config import configure_logging
 from settings import get_config
 from strava_client import fetch_activities, refresh_access_token
 from weekly_builder import build_weekly_training
-from writers import write_daily_csv, write_json, write_weekly_csv
 from db_writer import write_training_to_db
 from gear_db import fetch_gear_display_map
 
@@ -77,35 +76,6 @@ def main():
             logger.warning("%s", warning)
 
     run_at_utc = datetime.now(timezone.utc).isoformat()
-
-    daily_output = {
-        "run_at_utc": run_at_utc,
-        "days_back": cfg["DAYS_BACK"],
-        "load_chronic_c": cfg["LOAD_CHRONIC_C"],
-        "activity_count": len(rows),
-        "daily_training": daily,
-        "weekly_training": weekly,
-        "activities": rows,
-        "warnings": warnings,
-    }
-
-    weekly_output = {
-        "run_at_utc": run_at_utc,
-        "days_back": cfg["DAYS_BACK"],
-        "weekly_training": weekly,
-        "warnings": warnings,
-    }
-
-    write_json(cfg["OUTPUT_JSON"], daily_output)
-    write_daily_csv(cfg["OUTPUT_CSV"], daily)
-
-    write_json(cfg["OUTPUT_WEEKLY_JSON"], weekly_output)
-    write_weekly_csv(cfg["OUTPUT_WEEKLY_CSV"], weekly)
-
-    logger.info("Daily JSON written: %s", cfg["OUTPUT_JSON"])
-    logger.info("Daily CSV written: %s", cfg["OUTPUT_CSV"])
-    logger.info("Weekly JSON written: %s", cfg["OUTPUT_WEEKLY_JSON"])
-    logger.info("Weekly CSV written: %s", cfg["OUTPUT_WEEKLY_CSV"])
 
     write_training_to_db(
         cfg=cfg,

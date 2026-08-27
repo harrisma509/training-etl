@@ -1,7 +1,7 @@
 """ETL runtime settings.
 
 Configuration ownership pattern:
-- Strava credentials, training API tokens, database connection settings, and file output paths remain environment-owned ETL process configuration.
+- Strava credentials, training API tokens, and database connection settings remain environment-owned ETL process configuration.
 - DAYS_BACK is the default sync window used by the ETL process, but the effective window for a queued sync is captured into sync_request.days_back when a request is created.
 - AUTO_SYNC_MINUTES and SYNC_WORKER_POLL_SECONDS are scheduler-level process settings that govern the sync worker loop and should not be treated as user-facing app preferences.
 - Browser-facing settings should only expose non-secret operational values whose behavior is intentionally UI-managed and server-validated.
@@ -48,10 +48,6 @@ def get_config():
     "DAYS_BACK",
     "SYNC_WORKER_POLL_SECONDS",
     "AUTO_SYNC_MINUTES",
-    "OUTPUT_JSON",
-    "OUTPUT_CSV",
-    "OUTPUT_WEEKLY_JSON",
-    "OUTPUT_WEEKLY_CSV",
     "LOAD_CHRONIC_C",
     "WRITE_DB",
     "DB_HOST",
@@ -76,10 +72,6 @@ def get_config():
         raise SystemExit(f"Missing required config values: {', '.join(missing)}")
 
     cfg["DAYS_BACK"] = int(cfg.get("DAYS_BACK") or 7)
-    cfg["OUTPUT_JSON"] = cfg.get("OUTPUT_JSON") or "/tmp/daily_training.json"
-    cfg["OUTPUT_CSV"] = cfg.get("OUTPUT_CSV") or "/tmp/daily_training.csv"
-    cfg["OUTPUT_WEEKLY_JSON"] = cfg.get("OUTPUT_WEEKLY_JSON") or "/tmp/weekly_training.json"
-    cfg["OUTPUT_WEEKLY_CSV"] = cfg.get("OUTPUT_WEEKLY_CSV") or "/tmp/weekly_training.csv"
     cfg["LOAD_CHRONIC_C"] = float(cfg.get("LOAD_CHRONIC_C") or DEFAULT_CHRONIC_C)
     cfg["WRITE_DB"] = str(cfg.get("WRITE_DB") or "false").lower() == "true"
     cfg["DB_HOST"] = cfg.get("DB_HOST") or "training-postgres"
