@@ -191,21 +191,78 @@ def check_stuck_sync() -> CheckResult:
 
 def check_backup_mount(backup_dir: Path) -> CheckResult:
     try:
+        access_result = run_command(
+            ["timeout", "15", "ls", "-1", str(backup_dir)],
+            timeout=20,
+        )
+
+        if access_result.returncode != 0:
+            return CheckResult(
+                "harrisnas_mount_missing",
+                False,
+                "critical",
+                f"HarrisNAS backup directory could not be accessed: {backup_dir}",
+            )
         findmnt = require_command("findmnt")
+
         result = run_command(
-            [findmnt, "-rn", "-T", str(backup_dir), "-o", "FSTYPE,SOURCE"],
+            [
+                findmnt,
+                "-rn",
+                "-T",
+                str(backup_dir),
+                "-o",
+                "FSTYPE,SOURCE",
+            ],
             timeout=10,
         )
-        fields = result.stdout.strip().split(maxsplit=1)
-        filesystem = fields[0] if fields else ""
-        source = fields[1] if len(fields) > 1 else ""
-        healthy = result.returncode == 0 and filesystem in {"nfs", "nfs4"}
-        summary = (
-            f"HarrisNAS backup mount is available ({filesystem}, {source})"
-            if healthy
-            else f"HarrisNAS backup directory is not backed by NFS: {backup_dir}"
+
+        if result.returncode != 0:
+            return CheckResult(
+                "harrisnas_mount_missing",
+                False,
+                "critical",
+                f"HarrisNAS backup mount could not be inspected: {backup_dir}",
+            )
+
+        mounts = []
+
+        for line in result.stdout.splitlines():
+            fields = line.strip().split(maxsplit=1)
+
+            if not fields:
+                continue
+
+            filesystem = fields[0]
+            source = fields[1] if len(fields) > 1 else ""
+            mounts.append((filesystem, source))
+
+        nfs_mount = next(
+            (
+                (filesystem, source)
+                for filesystem, source in mounts
+                if filesystem in {"nfs", "nfs4"}
+            ),
+            None,
         )
-        return CheckResult("harrisnas_mount_missing", healthy, "critical", summary)
+
+        if nfs_mount is None:
+            return CheckResult(
+                "harrisnas_mount_missing",
+                False,
+                "critical",
+                f"HarrisNAS backup directory is not backed by NFS: {backup_dir}",
+            )
+
+        filesystem, source = nfs_mount
+
+        return CheckResult(
+            "harrisnas_mount_missing",
+            True,
+            "critical",
+            f"HarrisNAS backup mount is available ({filesystem}, {source})",
+        )
+
     except Exception as error:
         return CheckResult(
             "harrisnas_mount_missing",
