@@ -67,9 +67,12 @@ CREATE TABLE public.app_settings (
 	settings_id int2 NOT NULL, -- Singleton identifier. The only supported value is 1.
 	default_sync_days_back int4 DEFAULT 7 NOT NULL, -- Default number of recent days copied into new full-sync requests. Valid range is 1 through 6000. Existing requests retain their stored days_back value.
 	updated_at timestamptz DEFAULT now() NOT NULL, -- Timestamp of the most recent settings update.
+	CONSTRAINT app_settings_default_sync_days_back_not_null NOT NULL default_sync_days_back,
 	CONSTRAINT app_settings_default_sync_days_check CHECK (((default_sync_days_back >= 1) AND (default_sync_days_back <= 6000))),
 	CONSTRAINT app_settings_pkey PRIMARY KEY (settings_id),
-	CONSTRAINT app_settings_singleton_check CHECK ((settings_id = 1))
+	CONSTRAINT app_settings_settings_id_not_null NOT NULL settings_id,
+	CONSTRAINT app_settings_singleton_check CHECK ((settings_id = 1)),
+	CONSTRAINT app_settings_updated_at_not_null NOT NULL updated_at
 );
 COMMENT ON TABLE public.app_settings IS 'Singleton application settings used by the Training Dashboard. Contains non-secret, validated application preferences only.';
 
@@ -78,6 +81,35 @@ COMMENT ON TABLE public.app_settings IS 'Singleton application settings used by 
 COMMENT ON COLUMN public.app_settings.settings_id IS 'Singleton identifier. The only supported value is 1.';
 COMMENT ON COLUMN public.app_settings.default_sync_days_back IS 'Default number of recent days copied into new full-sync requests. Valid range is 1 through 6000. Existing requests retain their stored days_back value.';
 COMMENT ON COLUMN public.app_settings.updated_at IS 'Timestamp of the most recent settings update.';
+
+
+-- public.daily_fitness_fatigue definition
+
+-- Drop table
+
+-- DROP TABLE public.daily_fitness_fatigue;
+
+CREATE TABLE public.daily_fitness_fatigue (
+	"date" date NOT NULL,
+	daily_load int4 NOT NULL,
+	fitness numeric(10, 2) NOT NULL,
+	fatigue numeric(10, 2) NOT NULL,
+	form numeric(10, 2) NOT NULL,
+	model_version text DEFAULT 'v1'::text NOT NULL,
+	updated_at timestamptz DEFAULT now() NOT NULL,
+	CONSTRAINT daily_fitness_fatigue_daily_load_check CHECK ((daily_load >= 0)),
+	CONSTRAINT daily_fitness_fatigue_daily_load_not_null NOT NULL daily_load,
+	CONSTRAINT daily_fitness_fatigue_date_not_null NOT NULL date,
+	CONSTRAINT daily_fitness_fatigue_fatigue_check CHECK ((fatigue >= (0)::numeric)),
+	CONSTRAINT daily_fitness_fatigue_fatigue_not_null NOT NULL fatigue,
+	CONSTRAINT daily_fitness_fatigue_fitness_check CHECK ((fitness >= (0)::numeric)),
+	CONSTRAINT daily_fitness_fatigue_fitness_not_null NOT NULL fitness,
+	CONSTRAINT daily_fitness_fatigue_form_not_null NOT NULL form,
+	CONSTRAINT daily_fitness_fatigue_model_version_check CHECK ((btrim(model_version) <> ''::text)),
+	CONSTRAINT daily_fitness_fatigue_model_version_not_null NOT NULL model_version,
+	CONSTRAINT daily_fitness_fatigue_pkey PRIMARY KEY (date),
+	CONSTRAINT daily_fitness_fatigue_updated_at_not_null NOT NULL updated_at
+);
 
 
 -- public.daily_training definition
@@ -132,6 +164,7 @@ CREATE TABLE public.daily_training (
 	total_load int4 NULL,
 	updated_at timestamptz DEFAULT now() NULL,
 	other_activities jsonb NULL, -- Ordered supporting activities selected by the authoritative Daily ETL builder. Each item contains activity_id, name, and activity_category.
+	CONSTRAINT daily_training_date_not_null NOT NULL date,
 	CONSTRAINT daily_training_other_activities_array_check CHECK (((other_activities IS NULL) OR (jsonb_typeof(other_activities) = 'array'::text))),
 	CONSTRAINT daily_training_pkey PRIMARY KEY (date)
 );
@@ -161,6 +194,9 @@ CREATE TABLE public.gear (
 	created_at timestamp DEFAULT CURRENT_TIMESTAMP NULL,
 	updated_at timestamp DEFAULT CURRENT_TIMESTAMP NULL,
 	category text NULL,
+	CONSTRAINT gear_gear_id_not_null NOT NULL gear_id,
+	CONSTRAINT gear_gear_name_not_null NOT NULL gear_name,
+	CONSTRAINT gear_gear_type_not_null NOT NULL gear_type,
 	CONSTRAINT gear_pkey PRIMARY KEY (gear_id)
 );
 
@@ -177,8 +213,12 @@ CREATE TABLE public.health_falls (
 	falls int4 NOT NULL,
 	"source" text NULL,
 	updated_at timestamptz DEFAULT now() NOT NULL,
+	CONSTRAINT health_falls_date_not_null NOT NULL date,
 	CONSTRAINT health_falls_falls_check CHECK ((falls >= 0)),
-	CONSTRAINT health_falls_pkey PRIMARY KEY (date)
+	CONSTRAINT health_falls_falls_not_null NOT NULL falls,
+	CONSTRAINT health_falls_measured_at_not_null NOT NULL measured_at,
+	CONSTRAINT health_falls_pkey PRIMARY KEY (date),
+	CONSTRAINT health_falls_updated_at_not_null NOT NULL updated_at
 );
 CREATE INDEX idx_health_falls_measured_at ON public.health_falls USING btree (measured_at);
 
@@ -199,8 +239,12 @@ CREATE TABLE public.health_hrv (
 	"rule" text NULL,
 	proximity_level text NULL,
 	updated_at timestamptz DEFAULT now() NOT NULL,
+	CONSTRAINT health_hrv_date_not_null NOT NULL date,
 	CONSTRAINT health_hrv_hrv_sdnn_ms_check CHECK ((hrv_sdnn_ms > (0)::numeric)),
-	CONSTRAINT health_hrv_pkey PRIMARY KEY (date)
+	CONSTRAINT health_hrv_hrv_sdnn_ms_not_null NOT NULL hrv_sdnn_ms,
+	CONSTRAINT health_hrv_measured_at_not_null NOT NULL measured_at,
+	CONSTRAINT health_hrv_pkey PRIMARY KEY (date),
+	CONSTRAINT health_hrv_updated_at_not_null NOT NULL updated_at
 );
 CREATE INDEX idx_health_hrv_measured_at ON public.health_hrv USING btree (measured_at);
 CREATE INDEX idx_health_hrv_sample_timestamp ON public.health_hrv USING btree (sample_timestamp);
@@ -218,8 +262,12 @@ CREATE TABLE public.health_rhr (
 	rhr_bpm int4 NOT NULL,
 	"source" text NULL,
 	updated_at timestamptz DEFAULT now() NOT NULL,
+	CONSTRAINT health_rhr_date_not_null NOT NULL date,
+	CONSTRAINT health_rhr_measured_at_not_null NOT NULL measured_at,
 	CONSTRAINT health_rhr_pkey PRIMARY KEY (date),
-	CONSTRAINT health_rhr_rhr_bpm_check CHECK ((rhr_bpm > 0))
+	CONSTRAINT health_rhr_rhr_bpm_check CHECK ((rhr_bpm > 0)),
+	CONSTRAINT health_rhr_rhr_bpm_not_null NOT NULL rhr_bpm,
+	CONSTRAINT health_rhr_updated_at_not_null NOT NULL updated_at
 );
 CREATE INDEX idx_health_rhr_measured_at ON public.health_rhr USING btree (measured_at);
 
@@ -250,7 +298,9 @@ CREATE TABLE public.health_sleep (
 	score_version text NULL,
 	"source" text NULL,
 	updated_at timestamptz DEFAULT now() NOT NULL,
-	CONSTRAINT health_sleep_pkey PRIMARY KEY (date)
+	CONSTRAINT health_sleep_date_not_null NOT NULL date,
+	CONSTRAINT health_sleep_pkey PRIMARY KEY (date),
+	CONSTRAINT health_sleep_updated_at_not_null NOT NULL updated_at
 );
 
 
@@ -266,8 +316,12 @@ CREATE TABLE public.health_steps (
 	steps int4 NOT NULL,
 	"source" text NULL,
 	updated_at timestamptz DEFAULT now() NOT NULL,
+	CONSTRAINT health_steps_date_not_null NOT NULL date,
+	CONSTRAINT health_steps_measured_at_not_null NOT NULL measured_at,
 	CONSTRAINT health_steps_pkey PRIMARY KEY (date),
-	CONSTRAINT health_steps_steps_check CHECK ((steps >= 0))
+	CONSTRAINT health_steps_steps_check CHECK ((steps >= 0)),
+	CONSTRAINT health_steps_steps_not_null NOT NULL steps,
+	CONSTRAINT health_steps_updated_at_not_null NOT NULL updated_at
 );
 CREATE INDEX idx_health_steps_measured_at ON public.health_steps USING btree (measured_at);
 
@@ -284,8 +338,12 @@ CREATE TABLE public.health_vo2_max (
 	vo2max numeric NOT NULL,
 	"source" text NULL,
 	updated_at timestamptz DEFAULT now() NOT NULL,
+	CONSTRAINT health_vo2_max_measured_at_not_null NOT NULL measured_at,
 	CONSTRAINT health_vo2_max_pkey PRIMARY KEY (week_start),
-	CONSTRAINT health_vo2_max_vo2max_check CHECK ((vo2max > (0)::numeric))
+	CONSTRAINT health_vo2_max_updated_at_not_null NOT NULL updated_at,
+	CONSTRAINT health_vo2_max_vo2max_check CHECK ((vo2max > (0)::numeric)),
+	CONSTRAINT health_vo2_max_vo2max_not_null NOT NULL vo2max,
+	CONSTRAINT health_vo2_max_week_start_not_null NOT NULL week_start
 );
 CREATE INDEX idx_health_vo2_max_measured_at ON public.health_vo2_max USING btree (measured_at);
 
@@ -305,7 +363,9 @@ CREATE TABLE public.health_weight (
 	bmi numeric NULL,
 	"source" text NULL,
 	updated_at timestamptz DEFAULT now() NOT NULL,
-	CONSTRAINT health_weight_pkey PRIMARY KEY (date)
+	CONSTRAINT health_weight_date_not_null NOT NULL date,
+	CONSTRAINT health_weight_pkey PRIMARY KEY (date),
+	CONSTRAINT health_weight_updated_at_not_null NOT NULL updated_at
 );
 
 
@@ -328,7 +388,13 @@ CREATE TABLE public.sync_request (
 	activity_id int8 NULL,
 	result_json jsonb NULL,
 	CONSTRAINT ck_sync_request_type_target CHECK ((((request_type = 'full_sync'::text) AND (activity_id IS NULL)) OR ((request_type = 'activity_resync'::text) AND (activity_id IS NOT NULL) AND (activity_id > 0)))),
-	CONSTRAINT sync_request_pkey PRIMARY KEY (id)
+	CONSTRAINT sync_request_days_back_not_null NOT NULL days_back,
+	CONSTRAINT sync_request_id_not_null NOT NULL id,
+	CONSTRAINT sync_request_pkey PRIMARY KEY (id),
+	CONSTRAINT sync_request_request_type_not_null NOT NULL request_type,
+	CONSTRAINT sync_request_requested_at_utc_not_null NOT NULL requested_at_utc,
+	CONSTRAINT sync_request_requested_by_not_null NOT NULL requested_by,
+	CONSTRAINT sync_request_status_not_null NOT NULL status
 );
 CREATE INDEX idx_sync_request_status_requested ON public.sync_request USING btree (status, requested_at_utc);
 CREATE UNIQUE INDEX ux_sync_request_active_activity_resync ON public.sync_request USING btree (activity_id) WHERE ((request_type = 'activity_resync'::text) AND (status = ANY (ARRAY['pending'::text, 'running'::text])));
@@ -350,7 +416,9 @@ CREATE TABLE public.sync_run_log (
 	warning_count int4 NULL,
 	status text NULL,
 	created_at timestamptz DEFAULT now() NULL,
-	CONSTRAINT sync_run_log_pkey PRIMARY KEY (id)
+	CONSTRAINT sync_run_log_id_not_null NOT NULL id,
+	CONSTRAINT sync_run_log_pkey PRIMARY KEY (id),
+	CONSTRAINT sync_run_log_run_at_utc_not_null NOT NULL run_at_utc
 );
 
 
@@ -395,9 +463,13 @@ CREATE TABLE public.training_year (
 	CONSTRAINT training_year_activity_count_check CHECK (((activity_count IS NULL) OR (activity_count >= 0))),
 	CONSTRAINT training_year_bike_elevation_check CHECK (((bike_elevation_ft IS NULL) OR (bike_elevation_ft >= 0))),
 	CONSTRAINT training_year_calendar_year_check CHECK (((calendar_year >= 1900) AND (calendar_year <= 2200))),
+	CONSTRAINT training_year_calendar_year_not_null NOT NULL calendar_year,
 	CONSTRAINT training_year_coverage_status_check CHECK ((coverage_status = ANY (ARRAY['historical_import'::text, 'complete_calendar'::text, 'partial_calendar'::text, 'missing_months'::text, 'ytd'::text]))),
+	CONSTRAINT training_year_coverage_status_not_null NOT NULL coverage_status,
+	CONSTRAINT training_year_created_at_not_null NOT NULL created_at,
 	CONSTRAINT training_year_cycling_distance_check CHECK (((cycling_distance_mi IS NULL) OR (cycling_distance_mi >= (0)::numeric))),
 	CONSTRAINT training_year_hike_count_check CHECK (((hike_count IS NULL) OR (hike_count >= 0))),
+	CONSTRAINT training_year_is_ytd_not_null NOT NULL is_ytd,
 	CONSTRAINT training_year_mobility_sessions_check CHECK (((mobility_sessions IS NULL) OR (mobility_sessions >= 0))),
 	CONSTRAINT training_year_months_check CHECK (((months_with_activity IS NULL) OR ((months_with_activity >= 0) AND (months_with_activity <= 12)))),
 	CONSTRAINT training_year_pkey PRIMARY KEY (calendar_year),
@@ -412,6 +484,7 @@ CREATE TABLE public.training_year (
 	CONSTRAINT training_year_total_distance_check CHECK (((total_distance_mi IS NULL) OR (total_distance_mi >= (0)::numeric))),
 	CONSTRAINT training_year_total_elevation_check CHECK (((total_elevation_ft IS NULL) OR (total_elevation_ft >= 0))),
 	CONSTRAINT training_year_training_hours_check CHECK (((training_hours IS NULL) OR (training_hours >= (0)::numeric))),
+	CONSTRAINT training_year_updated_at_not_null NOT NULL updated_at,
 	CONSTRAINT training_year_walk_count_check CHECK (((walk_count IS NULL) OR (walk_count >= 0))),
 	CONSTRAINT training_year_weight_avg_check CHECK (((weight_avg_lb IS NULL) OR (weight_avg_lb > (0)::numeric))),
 	CONSTRAINT training_year_weight_avg_range_check CHECK (((weight_avg_lb IS NULL) OR (weight_min_lb IS NULL) OR (weight_max_lb IS NULL) OR ((weight_avg_lb >= weight_min_lb) AND (weight_avg_lb <= weight_max_lb)))),
@@ -452,16 +525,24 @@ CREATE TABLE public.training_year_run (
 	completed_at_utc timestamptz NULL,
 	created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	CONSTRAINT training_year_run_activity_count_check CHECK (((activity_count IS NULL) OR (activity_count >= 0))),
+	CONSTRAINT training_year_run_apply_changes_not_null NOT NULL apply_changes,
 	CONSTRAINT training_year_run_apply_mode_check CHECK ((((calculation_mode = 'preview'::text) AND (apply_changes = false)) OR (calculation_mode = ANY (ARRAY['calculate'::text, 'finalize'::text])))),
+	CONSTRAINT training_year_run_calculation_mode_not_null NOT NULL calculation_mode,
 	CONSTRAINT training_year_run_calendar_year_check CHECK (((calendar_year >= 1900) AND (calendar_year <= 2200))),
+	CONSTRAINT training_year_run_calendar_year_not_null NOT NULL calendar_year,
+	CONSTRAINT training_year_run_created_at_not_null NOT NULL created_at,
 	CONSTRAINT training_year_run_mode_check CHECK ((calculation_mode = ANY (ARRAY['preview'::text, 'calculate'::text, 'finalize'::text]))),
 	CONSTRAINT training_year_run_months_check CHECK (((months_with_activity IS NULL) OR ((months_with_activity >= 0) AND (months_with_activity <= 12)))),
 	CONSTRAINT training_year_run_pkey PRIMARY KEY (training_year_run_id),
+	CONSTRAINT training_year_run_requested_at_utc_not_null NOT NULL requested_at_utc,
 	CONSTRAINT training_year_run_requested_by_check CHECK ((btrim(requested_by) <> ''::text)),
+	CONSTRAINT training_year_run_requested_by_not_null NOT NULL requested_by,
 	CONSTRAINT training_year_run_source_date_order_check CHECK (((source_first_date IS NULL) OR (source_last_date IS NULL) OR (source_last_date >= source_first_date))),
 	CONSTRAINT training_year_run_source_dates_match_year_check CHECK ((((source_first_date IS NULL) OR ((EXTRACT(year FROM source_first_date))::integer = calendar_year)) AND ((source_last_date IS NULL) OR ((EXTRACT(year FROM source_last_date))::integer = calendar_year)))),
 	CONSTRAINT training_year_run_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text]))),
-	CONSTRAINT training_year_run_timestamp_order_check CHECK ((((started_at_utc IS NULL) OR (started_at_utc >= requested_at_utc)) AND ((completed_at_utc IS NULL) OR (started_at_utc IS NOT NULL)) AND ((completed_at_utc IS NULL) OR (completed_at_utc >= started_at_utc))))
+	CONSTRAINT training_year_run_status_not_null NOT NULL status,
+	CONSTRAINT training_year_run_timestamp_order_check CHECK ((((started_at_utc IS NULL) OR (started_at_utc >= requested_at_utc)) AND ((completed_at_utc IS NULL) OR (started_at_utc IS NOT NULL)) AND ((completed_at_utc IS NULL) OR (completed_at_utc >= started_at_utc)))),
+	CONSTRAINT training_year_run_training_year_run_id_not_null NOT NULL training_year_run_id
 );
 CREATE INDEX training_year_run_status_requested_idx ON public.training_year_run USING btree (status, requested_at_utc DESC);
 CREATE INDEX training_year_run_year_requested_idx ON public.training_year_run USING btree (calendar_year, requested_at_utc DESC);
@@ -492,7 +573,15 @@ CREATE TABLE public.weekly_audit (
 	reviewed_at timestamptz NULL,
 	created_at timestamptz DEFAULT now() NOT NULL,
 	updated_at timestamptz DEFAULT now() NOT NULL,
-	CONSTRAINT weekly_audit_pkey PRIMARY KEY (week_start)
+	CONSTRAINT weekly_audit_audit_version_not_null NOT NULL audit_version,
+	CONSTRAINT weekly_audit_created_at_not_null NOT NULL created_at,
+	CONSTRAINT weekly_audit_green_count_not_null NOT NULL green_count,
+	CONSTRAINT weekly_audit_pkey PRIMARY KEY (week_start),
+	CONSTRAINT weekly_audit_red_count_not_null NOT NULL red_count,
+	CONSTRAINT weekly_audit_source_not_null NOT NULL source,
+	CONSTRAINT weekly_audit_updated_at_not_null NOT NULL updated_at,
+	CONSTRAINT weekly_audit_week_start_not_null NOT NULL week_start,
+	CONSTRAINT weekly_audit_yellow_count_not_null NOT NULL yellow_count
 );
 
 
@@ -515,7 +604,16 @@ CREATE TABLE public.weekly_audit_item (
 	created_at timestamptz DEFAULT now() NOT NULL,
 	updated_at timestamptz DEFAULT now() NOT NULL,
 	CONSTRAINT uq_weekly_audit_item_week_key UNIQUE (week_start, item_key),
-	CONSTRAINT weekly_audit_item_pkey PRIMARY KEY (id)
+	CONSTRAINT weekly_audit_item_created_at_not_null NOT NULL created_at,
+	CONSTRAINT weekly_audit_item_id_not_null NOT NULL id,
+	CONSTRAINT weekly_audit_item_item_key_not_null NOT NULL item_key,
+	CONSTRAINT weekly_audit_item_item_label_not_null NOT NULL item_label,
+	CONSTRAINT weekly_audit_item_pkey PRIMARY KEY (id),
+	CONSTRAINT weekly_audit_item_sort_order_not_null NOT NULL sort_order,
+	CONSTRAINT weekly_audit_item_source_not_null NOT NULL source,
+	CONSTRAINT weekly_audit_item_status_not_null NOT NULL status,
+	CONSTRAINT weekly_audit_item_updated_at_not_null NOT NULL updated_at,
+	CONSTRAINT weekly_audit_item_week_start_not_null NOT NULL week_start
 );
 
 
@@ -547,7 +645,18 @@ CREATE TABLE public.weekly_commentary (
 	display_priority int4 DEFAULT 0 NOT NULL,
 	created_at timestamptz DEFAULT now() NOT NULL,
 	updated_at timestamptz DEFAULT now() NOT NULL,
-	CONSTRAINT weekly_commentary_pkey PRIMARY KEY (week_start)
+	CONSTRAINT weekly_commentary_created_at_not_null NOT NULL created_at,
+	CONSTRAINT weekly_commentary_display_priority_not_null NOT NULL display_priority,
+	CONSTRAINT weekly_commentary_hide_from_dashboard_not_null NOT NULL hide_from_dashboard,
+	CONSTRAINT weekly_commentary_is_bike_park_week_not_null NOT NULL is_bike_park_week,
+	CONSTRAINT weekly_commentary_is_goal_week_not_null NOT NULL is_goal_week,
+	CONSTRAINT weekly_commentary_is_injury_week_not_null NOT NULL is_injury_week,
+	CONSTRAINT weekly_commentary_is_recovery_week_not_null NOT NULL is_recovery_week,
+	CONSTRAINT weekly_commentary_is_sick_week_not_null NOT NULL is_sick_week,
+	CONSTRAINT weekly_commentary_is_travel_week_not_null NOT NULL is_travel_week,
+	CONSTRAINT weekly_commentary_pkey PRIMARY KEY (week_start),
+	CONSTRAINT weekly_commentary_updated_at_not_null NOT NULL updated_at,
+	CONSTRAINT weekly_commentary_week_start_not_null NOT NULL week_start
 );
 CREATE INDEX idx_weekly_commentary_event ON public.weekly_commentary USING btree (event);
 CREATE INDEX idx_weekly_commentary_flags ON public.weekly_commentary USING btree (is_travel_week, is_sick_week, is_injury_week, is_bike_park_week, is_recovery_week);
@@ -585,7 +694,8 @@ CREATE TABLE public.weekly_training (
 	status_level text NULL,
 	status_text text NULL,
 	updated_at timestamptz DEFAULT now() NULL,
-	CONSTRAINT weekly_training_pkey PRIMARY KEY (week_start)
+	CONSTRAINT weekly_training_pkey PRIMARY KEY (week_start),
+	CONSTRAINT weekly_training_week_start_not_null NOT NULL week_start
 );
 
 
@@ -615,6 +725,14 @@ CREATE TABLE public.gear_component (
 	notes text NULL,
 	created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	CONSTRAINT gear_component_active_not_null NOT NULL active,
+	CONSTRAINT gear_component_component_group_not_null NOT NULL component_group,
+	CONSTRAINT gear_component_component_key_not_null NOT NULL component_key,
+	CONSTRAINT gear_component_component_name_not_null NOT NULL component_name,
+	CONSTRAINT gear_component_created_at_not_null NOT NULL created_at,
+	CONSTRAINT gear_component_display_order_not_null NOT NULL display_order,
+	CONSTRAINT gear_component_gear_component_id_not_null NOT NULL gear_component_id,
+	CONSTRAINT gear_component_gear_id_not_null NOT NULL gear_id,
 	CONSTRAINT gear_component_gear_key_unique UNIQUE (gear_id, component_key),
 	CONSTRAINT gear_component_group_not_blank CHECK ((btrim(component_group) <> ''::text)),
 	CONSTRAINT gear_component_interval_days_check CHECK (((service_interval_days IS NULL) OR (service_interval_days > 0))),
@@ -625,7 +743,12 @@ CREATE TABLE public.gear_component (
 	CONSTRAINT gear_component_name_not_blank CHECK ((btrim(component_name) <> ''::text)),
 	CONSTRAINT gear_component_pkey PRIMARY KEY (gear_component_id),
 	CONSTRAINT gear_component_preferred_metric_check CHECK ((preferred_metric = ANY (ARRAY['miles'::text, 'hours'::text, 'days'::text, 'rides'::text, 'mixed'::text, 'inspection'::text]))),
+	CONSTRAINT gear_component_preferred_metric_not_null NOT NULL preferred_metric,
+	CONSTRAINT gear_component_track_life_not_null NOT NULL track_life,
+	CONSTRAINT gear_component_track_service_not_null NOT NULL track_service,
+	CONSTRAINT gear_component_updated_at_not_null NOT NULL updated_at,
 	CONSTRAINT gear_component_warning_percent_check CHECK (((warning_percent > (0)::numeric) AND (warning_percent <= (100)::numeric))),
+	CONSTRAINT gear_component_warning_percent_not_null NOT NULL warning_percent,
 	CONSTRAINT gear_component_gear_fkey FOREIGN KEY (gear_id) REFERENCES public.gear(gear_id) ON DELETE RESTRICT ON UPDATE CASCADE
 );
 CREATE INDEX gear_component_gear_active_order_idx ON public.gear_component USING btree (gear_id, active, display_order, component_name);
@@ -659,13 +782,21 @@ CREATE TABLE public.gear_service_event (
 	created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	CONSTRAINT gear_service_event_action_not_blank CHECK ((btrim(action) <> ''::text)),
+	CONSTRAINT gear_service_event_action_not_null NOT NULL action,
 	CONSTRAINT gear_service_event_cost_check CHECK (((cost IS NULL) OR (cost >= (0)::numeric))),
+	CONSTRAINT gear_service_event_created_at_not_null NOT NULL created_at,
+	CONSTRAINT gear_service_event_gear_component_id_not_null NOT NULL gear_component_id,
+	CONSTRAINT gear_service_event_gear_id_not_null NOT NULL gear_id,
 	CONSTRAINT gear_service_event_odometer_elevation_check CHECK (((odometer_elevation_ft IS NULL) OR (odometer_elevation_ft >= 0))),
 	CONSTRAINT gear_service_event_odometer_hours_check CHECK (((odometer_hours IS NULL) OR (odometer_hours >= (0)::numeric))),
 	CONSTRAINT gear_service_event_odometer_miles_check CHECK (((odometer_miles IS NULL) OR (odometer_miles >= (0)::numeric))),
 	CONSTRAINT gear_service_event_odometer_rides_check CHECK (((odometer_rides IS NULL) OR (odometer_rides >= 0))),
 	CONSTRAINT gear_service_event_pkey PRIMARY KEY (service_event_id),
+	CONSTRAINT gear_service_event_service_date_not_null NOT NULL service_date,
+	CONSTRAINT gear_service_event_service_event_id_not_null NOT NULL service_event_id,
 	CONSTRAINT gear_service_event_source_check CHECK ((source = ANY (ARRAY['app'::text, 'excel_import'::text, 'manual_sql'::text, 'api'::text]))),
+	CONSTRAINT gear_service_event_source_not_null NOT NULL source,
+	CONSTRAINT gear_service_event_updated_at_not_null NOT NULL updated_at,
 	CONSTRAINT gear_service_event_component_fkey FOREIGN KEY (gear_component_id) REFERENCES public.gear_component(gear_component_id) ON DELETE RESTRICT ON UPDATE CASCADE,
 	CONSTRAINT gear_service_event_gear_fkey FOREIGN KEY (gear_id) REFERENCES public.gear(gear_id) ON DELETE RESTRICT ON UPDATE CASCADE
 );
@@ -697,6 +828,8 @@ CREATE TABLE public.strava_activities (
 	bike_name text NULL,
 	raw_json jsonb NULL,
 	updated_at timestamptz DEFAULT now() NULL,
+	CONSTRAINT strava_activities_activity_id_not_null NOT NULL activity_id,
+	CONSTRAINT strava_activities_date_local_not_null NOT NULL date_local,
 	CONSTRAINT strava_activities_pkey PRIMARY KEY (activity_id),
 	CONSTRAINT fk_strava_activities_gear FOREIGN KEY (gear_id) REFERENCES public.gear(gear_id)
 );
@@ -718,8 +851,12 @@ CREATE TABLE public.training_year_commentary (
 	source_reference text NULL,
 	created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	CONSTRAINT training_year_commentary_calendar_year_not_null NOT NULL calendar_year,
+	CONSTRAINT training_year_commentary_created_at_not_null NOT NULL created_at,
 	CONSTRAINT training_year_commentary_pkey PRIMARY KEY (calendar_year),
 	CONSTRAINT training_year_commentary_source_check CHECK ((source = ANY (ARRAY['excel_import'::text, 'manual'::text, 'mixed'::text]))),
+	CONSTRAINT training_year_commentary_source_not_null NOT NULL source,
+	CONSTRAINT training_year_commentary_updated_at_not_null NOT NULL updated_at,
 	CONSTRAINT training_year_commentary_year_fkey FOREIGN KEY (calendar_year) REFERENCES public.training_year(calendar_year) ON DELETE CASCADE ON UPDATE CASCADE
 );
 COMMENT ON TABLE public.training_year_commentary IS 'Yearly Good, Bad, and annual narrative content kept separate from numerical facts.';
@@ -740,9 +877,14 @@ CREATE TABLE public.training_year_metric_source (
 	notes text NULL,
 	created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	CONSTRAINT training_year_metric_source_calendar_year_not_null NOT NULL calendar_year,
+	CONSTRAINT training_year_metric_source_created_at_not_null NOT NULL created_at,
 	CONSTRAINT training_year_metric_source_key_check CHECK ((btrim(metric_key) <> ''::text)),
+	CONSTRAINT training_year_metric_source_metric_key_not_null NOT NULL metric_key,
 	CONSTRAINT training_year_metric_source_pkey PRIMARY KEY (calendar_year, metric_key),
 	CONSTRAINT training_year_metric_source_source_check CHECK ((source = ANY (ARRAY['excel_import'::text, 'strava_rollup'::text, 'health_rollup'::text, 'manual'::text]))),
+	CONSTRAINT training_year_metric_source_source_not_null NOT NULL source,
+	CONSTRAINT training_year_metric_source_updated_at_not_null NOT NULL updated_at,
 	CONSTRAINT training_year_metric_source_year_fkey FOREIGN KEY (calendar_year) REFERENCES public.training_year(calendar_year) ON DELETE CASCADE ON UPDATE CASCADE
 );
 CREATE INDEX training_year_metric_source_metric_year_idx ON public.training_year_metric_source USING btree (metric_key, calendar_year DESC);
@@ -779,7 +921,11 @@ CREATE TABLE public.training_year_month (
 	CONSTRAINT training_year_month_active_days_check CHECK (((active_days IS NULL) OR (active_days >= 0))),
 	CONSTRAINT training_year_month_activity_count_check CHECK (((activity_count IS NULL) OR (activity_count >= 0))),
 	CONSTRAINT training_year_month_bike_elevation_check CHECK (((bike_elevation_ft IS NULL) OR (bike_elevation_ft >= 0))),
+	CONSTRAINT training_year_month_calendar_month_not_null NOT NULL calendar_month,
+	CONSTRAINT training_year_month_calendar_year_not_null NOT NULL calendar_year,
+	CONSTRAINT training_year_month_created_at_not_null NOT NULL created_at,
 	CONSTRAINT training_year_month_cycling_distance_check CHECK (((cycling_distance_mi IS NULL) OR (cycling_distance_mi >= (0)::numeric))),
+	CONSTRAINT training_year_month_is_complete_not_null NOT NULL is_complete,
 	CONSTRAINT training_year_month_month_check CHECK (((calendar_month >= 1) AND (calendar_month <= 12))),
 	CONSTRAINT training_year_month_pkey PRIMARY KEY (calendar_year, calendar_month),
 	CONSTRAINT training_year_month_ride_count_check CHECK (((ride_count IS NULL) OR (ride_count >= 0))),
@@ -791,6 +937,7 @@ CREATE TABLE public.training_year_month (
 	CONSTRAINT training_year_month_total_distance_check CHECK (((total_distance_mi IS NULL) OR (total_distance_mi >= (0)::numeric))),
 	CONSTRAINT training_year_month_total_elevation_check CHECK (((total_elevation_ft IS NULL) OR (total_elevation_ft >= 0))),
 	CONSTRAINT training_year_month_training_hours_check CHECK (((training_hours IS NULL) OR (training_hours >= (0)::numeric))),
+	CONSTRAINT training_year_month_updated_at_not_null NOT NULL updated_at,
 	CONSTRAINT training_year_month_year_fkey FOREIGN KEY (calendar_year) REFERENCES public.training_year(calendar_year) ON DELETE CASCADE ON UPDATE CASCADE
 );
 CREATE INDEX training_year_month_month_year_idx ON public.training_year_month USING btree (calendar_month, calendar_year DESC);
