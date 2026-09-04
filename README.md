@@ -12,6 +12,31 @@ Python ETL project for the Training Web App.
 - Store schema/reference SQL for the training database
 - Avoid desktop Excel dependency for app runtime
 
+## Daily Fitness, Fatigue, and Form rebuild
+
+The complete daily Fitness/Fatigue/Form series can be previewed or populated
+with the focused CLI. Run it from the repository root:
+
+```powershell
+python .\src\rebuild_fitness_fatigue.py --dry-run
+```
+
+`--dry-run` reads `daily_training`, calculates the series from January 1, 2025
+through the current date in `America/Denver`, and prints the model summary and
+latest 14 rows. It uses a read-only transaction and performs no database
+writes.
+
+After reviewing the preview, populate or replace the complete series with:
+
+```powershell
+python .\src\rebuild_fitness_fatigue.py --apply
+```
+
+`--apply` replaces `public.daily_fitness_fatigue` in one transaction, verifies
+the generated coverage and model version before committing, and rolls back on
+any failure. Exactly one of `--dry-run` or `--apply` is required; the command
+never defaults to applying changes.
+
 ## Repo boundary
 
 This repo owns:

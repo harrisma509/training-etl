@@ -1,8 +1,12 @@
 import json
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import psycopg
 from psycopg.rows import dict_row
+from fitness_fatigue_builder import build_fitness_fatigue, validate_fitness_fatigue_rows
+from settings import get_fitness_fatigue_config
 from weekly_builder import build_weekly_training
 
 logger = logging.getLogger(__name__)
@@ -37,6 +41,7 @@ def write_training_to_db(cfg, activities, daily_rows, weekly_rows, warnings, run
 
             logger.info("DB write: daily")
             upsert_daily_training(cur, daily_rows)
+            rebuild_fitness_fatigue(cur)
             logger.info("DB rebuild: weekly from full daily_training")
             all_daily_rows = fetch_all_daily_training_for_weekly(cur)
             weekly_rows = build_weekly_training(all_daily_rows)
@@ -56,6 +61,105 @@ def write_training_to_db(cfg, activities, daily_rows, weekly_rows, warnings, run
             )
 
         conn.commit()
+
+
+def fetch_daily_load_rows(cur, start_date, through_date):
+    cur.execute(
+        """
+        SELECT
+            "date",
+            total_load
+        FROM public.daily_training
+        WHERE "date" >= %s
+          AND "date" <= %s
+        ORDER BY "date"
+        """,
+        (start_date, through_date),
+    )
+    columns = [column.name for column in cur.description]
+    rows = cur.fetchall()
+    return [
+        dict(row) if isinstance(row, dict) else dict(zip(columns, row))
+        for row in rows
+    ]
+
+
+def rebuild_fitness_fatigue(cur):
+    logger.info("Fitness/Fatigue/Form rebuild starting")
+
+    try:
+        model_rows, model_config, through_date, _ = prepare_fitness_fatigue(cur)
+        replace_fitness_fatigue(cur, model_rows)
+    except Exception:
+        logger.exception("Fitness/Fatigue/Form rebuild failed")
+        raise
+
+    logger.info("Fitness/Fatigue/Form rebuild completed: rows=%s", len(model_rows))
+
+
+def prepare_fitness_fatigue(cur):
+    model_config = get_fitness_fatigue_config()
+    through_date = datetime.now(ZoneInfo(model_config["app_timezone"])).date()
+    logger.info(
+        "Fitness/Fatigue/Form config: start=%s through=%s model_version=%s",
+        model_config["start_date"],
+        through_date,
+        model_config["model_version"],
+    )
+
+    source_rows = fetch_daily_load_rows(
+        cur,
+        model_config["start_date"],
+        through_date,
+    )
+    model_rows = build_fitness_fatigue(
+        daily_load_rows=source_rows,
+        start_date=model_config["start_date"],
+        through_date=through_date,
+        fitness_days=model_config["fitness_days"],
+        fatigue_days=model_config["fatigue_days"],
+        model_version=model_config["model_version"],
+    )
+    validate_fitness_fatigue_rows(
+        model_rows,
+        model_config["start_date"],
+        through_date,
+        model_config["model_version"],
+    )
+    logger.info(
+        "Fitness/Fatigue/Form source rows=%s generated rows=%s zero-load days=%s",
+        len(source_rows),
+        len(model_rows),
+        sum(1 for row in model_rows if row["daily_load"] == 0),
+    )
+    return model_rows, model_config, through_date, source_rows
+
+
+def replace_fitness_fatigue(cur, model_rows):
+    cur.execute("DELETE FROM public.daily_fitness_fatigue")
+    for row in model_rows:
+        cur.execute(
+            """
+            INSERT INTO public.daily_fitness_fatigue (
+                "date",
+                daily_load,
+                fitness,
+                fatigue,
+                form,
+                model_version,
+                updated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, now())
+            """,
+            (
+                row["date"],
+                row["daily_load"],
+                row["fitness"],
+                row["fatigue"],
+                row["form"],
+                row["model_version"],
+            ),
+        )
 def fetch_all_daily_training_for_weekly(cur):
     cur.execute("""
         SELECT

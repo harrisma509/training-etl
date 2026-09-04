@@ -8,7 +8,17 @@ Configuration ownership pattern:
 """
 
 import os
+from datetime import date
+from zoneinfo import ZoneInfo
+
 from constants import DEFAULT_CHRONIC_C
+from constants import (
+    APP_TIMEZONE,
+    FATIGUE_TIME_CONSTANT_DAYS,
+    FITNESS_FATIGUE_MODEL_VERSION,
+    FITNESS_FATIGUE_START_DATE,
+    FITNESS_TIME_CONSTANT_DAYS,
+)
 
 class Config(dict):
     def __getattr__(self, key):
@@ -111,3 +121,32 @@ def get_db_config():
     cfg["DB_PASSWORD"] = cfg.get("DB_PASSWORD") or ""
 
     return Config(cfg)
+
+
+def get_fitness_fatigue_config():
+    try:
+        start_date = date.fromisoformat(FITNESS_FATIGUE_START_DATE)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("FITNESS_FATIGUE_START_DATE must be an ISO date") from exc
+
+    try:
+        ZoneInfo(APP_TIMEZONE)
+    except Exception as exc:
+        raise ValueError(f"Invalid application timezone: {APP_TIMEZONE}") from exc
+
+    if not isinstance(FITNESS_TIME_CONSTANT_DAYS, int) or FITNESS_TIME_CONSTANT_DAYS <= 0:
+        raise ValueError("FITNESS_TIME_CONSTANT_DAYS must be a positive integer")
+
+    if not isinstance(FATIGUE_TIME_CONSTANT_DAYS, int) or FATIGUE_TIME_CONSTANT_DAYS <= 0:
+        raise ValueError("FATIGUE_TIME_CONSTANT_DAYS must be a positive integer")
+
+    if not FITNESS_FATIGUE_MODEL_VERSION.strip():
+        raise ValueError("FITNESS_FATIGUE_MODEL_VERSION must not be blank")
+
+    return {
+        "start_date": start_date,
+        "app_timezone": APP_TIMEZONE,
+        "fitness_days": FITNESS_TIME_CONSTANT_DAYS,
+        "fatigue_days": FATIGUE_TIME_CONSTANT_DAYS,
+        "model_version": FITNESS_FATIGUE_MODEL_VERSION,
+    }

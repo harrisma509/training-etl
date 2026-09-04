@@ -9,7 +9,12 @@ from psycopg.rows import dict_row
 
 from activity_utils import classify_activity, normalize_activity
 from daily_builder import build_daily_training
-from db_writer import replace_weekly_training, upsert_daily_training, upsert_strava_activities
+from db_writer import (
+    rebuild_fitness_fatigue,
+    replace_weekly_training,
+    upsert_daily_training,
+    upsert_strava_activities,
+)
 from gear_db import fetch_gear_display_map
 from settings import get_config
 from strava_client import fetch_activity_detail, refresh_access_token
@@ -527,6 +532,13 @@ def resync_activity(cfg, activity_id):
                             if warning:
                                 warnings.append(warning)
 
+                fitness_fatigue_rebuilt = bool(changed_fields) and any(
+                    field not in {"name", "gear_id"}
+                    for field in changed_fields
+                )
+                if fitness_fatigue_rebuilt:
+                    rebuild_fitness_fatigue(cur)
+
                 if weekly_rebuilt:
                     all_daily_rows = fetch_all_daily_rows(cur)
                     weekly_rows = build_weekly_training(all_daily_rows)
@@ -551,6 +563,7 @@ def resync_activity(cfg, activity_id):
         "daily_rebuilt": daily_rebuilt,
         "weekly_rebuilt": weekly_rebuilt,
         "weekly_rows_rebuilt": len(weekly_rows),
+        "fitness_fatigue_rebuilt": fitness_fatigue_rebuilt,
         "weekly_skip_reason": weekly_skip_reason if not weekly_rebuilt else None,
         "old_gear_id": old_gear_id,
         "new_gear_id": new_gear_id,
