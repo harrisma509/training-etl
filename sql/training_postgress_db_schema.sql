@@ -4,6 +4,42 @@ CREATE SCHEMA public AUTHORIZATION pg_database_owner;
 
 COMMENT ON SCHEMA public IS 'standard public schema';
 
+-- DROP SEQUENCE public.coach_message_coach_message_id_seq;
+
+CREATE SEQUENCE public.coach_message_coach_message_id_seq
+	INCREMENT BY 1
+	MINVALUE 1
+	MAXVALUE 9223372036854775807
+	START 1
+	CACHE 1
+	NO CYCLE;
+-- DROP SEQUENCE public.coach_session_coach_session_id_seq;
+
+CREATE SEQUENCE public.coach_session_coach_session_id_seq
+	INCREMENT BY 1
+	MINVALUE 1
+	MAXVALUE 9223372036854775807
+	START 1
+	CACHE 1
+	NO CYCLE;
+-- DROP SEQUENCE public.coach_tool_call_coach_tool_call_id_seq;
+
+CREATE SEQUENCE public.coach_tool_call_coach_tool_call_id_seq
+	INCREMENT BY 1
+	MINVALUE 1
+	MAXVALUE 9223372036854775807
+	START 1
+	CACHE 1
+	NO CYCLE;
+-- DROP SEQUENCE public.coach_turn_coach_turn_id_seq;
+
+CREATE SEQUENCE public.coach_turn_coach_turn_id_seq
+	INCREMENT BY 1
+	MINVALUE 1
+	MAXVALUE 9223372036854775807
+	START 1
+	CACHE 1
+	NO CYCLE;
 -- DROP SEQUENCE public.gear_component_gear_component_id_seq;
 
 CREATE SEQUENCE public.gear_component_gear_component_id_seq
@@ -942,6 +978,235 @@ CREATE TABLE public.training_year_month (
 );
 CREATE INDEX training_year_month_month_year_idx ON public.training_year_month USING btree (calendar_month, calendar_year DESC);
 COMMENT ON TABLE public.training_year_month IS 'One row per calendar month containing imported and calculated monthly training facts.';
+
+
+-- public.coach_message definition
+
+-- Drop table
+
+-- DROP TABLE public.coach_message;
+
+CREATE TABLE public.coach_message (
+	coach_message_id int8 GENERATED ALWAYS AS IDENTITY( INCREMENT BY 1 MINVALUE 1 MAXVALUE 9223372036854775807 START 1 CACHE 1 NO CYCLE) NOT NULL,
+	coach_session_id int8 NOT NULL,
+	"role" text NOT NULL,
+	message_kind text DEFAULT 'text'::text NOT NULL,
+	message_text text NOT NULL,
+	structured_payload jsonb NULL, -- Validated structured response data only; excludes secrets, full prompts, raw tool output, SQL, and stack traces.
+	created_at timestamptz DEFAULT now() NOT NULL,
+	CONSTRAINT coach_message_coach_message_id_not_null NOT NULL coach_message_id,
+	CONSTRAINT coach_message_coach_session_id_not_null NOT NULL coach_session_id,
+	CONSTRAINT coach_message_created_at_not_null NOT NULL created_at,
+	CONSTRAINT coach_message_kind_not_blank CHECK ((btrim(message_kind) <> ''::text)),
+	CONSTRAINT coach_message_message_kind_not_null NOT NULL message_kind,
+	CONSTRAINT coach_message_message_text_not_null NOT NULL message_text,
+	CONSTRAINT coach_message_pkey PRIMARY KEY (coach_message_id),
+	CONSTRAINT coach_message_role_check CHECK ((role = ANY (ARRAY['user'::text, 'assistant'::text, 'system_event'::text]))),
+	CONSTRAINT coach_message_role_not_null NOT NULL role,
+	CONSTRAINT coach_message_structured_payload_object_check CHECK (((structured_payload IS NULL) OR (jsonb_typeof(structured_payload) = 'object'::text))),
+	CONSTRAINT coach_message_text_not_blank CHECK ((btrim(message_text) <> ''::text))
+);
+CREATE INDEX coach_message_session_order_idx ON public.coach_message USING btree (coach_session_id, created_at, coach_message_id);
+COMMENT ON TABLE public.coach_message IS 'Indefinitely retained user, assistant, and system-event messages for AI Coach sessions.';
+
+-- Column comments
+
+COMMENT ON COLUMN public.coach_message.structured_payload IS 'Validated structured response data only; excludes secrets, full prompts, raw tool output, SQL, and stack traces.';
+
+
+-- public.coach_session definition
+
+-- Drop table
+
+-- DROP TABLE public.coach_session;
+
+CREATE TABLE public.coach_session (
+	coach_session_id int8 GENERATED ALWAYS AS IDENTITY( INCREMENT BY 1 MINVALUE 1 MAXVALUE 9223372036854775807 START 1 CACHE 1 NO CYCLE) NOT NULL,
+	title text NOT NULL,
+	status text DEFAULT 'active'::text NOT NULL,
+	provider text NULL,
+	default_model text NULL,
+	coaching_policy_version text NOT NULL,
+	summary text NULL, -- Compact context summary for future model requests; does not replace or delete original messages.
+	summary_through_message_id int8 NULL, -- Highest message identifier represented by summary after compaction.
+	compacted_at timestamptz NULL,
+	compaction_count int4 DEFAULT 0 NOT NULL,
+	last_provider_response_id text NULL, -- Opaque provider response identifier only; never contains credentials or prompt content.
+	last_activity_at timestamptz DEFAULT now() NOT NULL,
+	created_at timestamptz DEFAULT now() NOT NULL,
+	updated_at timestamptz DEFAULT now() NOT NULL,
+	CONSTRAINT coach_session_activity_time_check CHECK ((last_activity_at >= created_at)),
+	CONSTRAINT coach_session_coach_session_id_not_null NOT NULL coach_session_id,
+	CONSTRAINT coach_session_coaching_policy_version_not_null NOT NULL coaching_policy_version,
+	CONSTRAINT coach_session_compaction_count_check CHECK ((compaction_count >= 0)),
+	CONSTRAINT coach_session_compaction_count_not_null NOT NULL compaction_count,
+	CONSTRAINT coach_session_compaction_state_check CHECK ((((compaction_count = 0) AND (compacted_at IS NULL) AND (summary_through_message_id IS NULL)) OR ((compaction_count > 0) AND (compacted_at IS NOT NULL) AND (summary_through_message_id IS NOT NULL) AND (summary IS NOT NULL) AND (btrim(summary) <> ''::text)))),
+	CONSTRAINT coach_session_created_at_not_null NOT NULL created_at,
+	CONSTRAINT coach_session_default_model_not_blank CHECK (((default_model IS NULL) OR (btrim(default_model) <> ''::text))),
+	CONSTRAINT coach_session_last_activity_at_not_null NOT NULL last_activity_at,
+	CONSTRAINT coach_session_pkey PRIMARY KEY (coach_session_id),
+	CONSTRAINT coach_session_policy_version_not_blank CHECK ((btrim(coaching_policy_version) <> ''::text)),
+	CONSTRAINT coach_session_provider_not_blank CHECK (((provider IS NULL) OR (btrim(provider) <> ''::text))),
+	CONSTRAINT coach_session_status_check CHECK ((status = ANY (ARRAY['active'::text, 'archived'::text]))),
+	CONSTRAINT coach_session_status_not_null NOT NULL status,
+	CONSTRAINT coach_session_title_not_blank CHECK ((btrim(title) <> ''::text)),
+	CONSTRAINT coach_session_title_not_null NOT NULL title,
+	CONSTRAINT coach_session_updated_at_not_null NOT NULL updated_at,
+	CONSTRAINT coach_session_updated_time_check CHECK ((updated_at >= created_at))
+);
+CREATE INDEX coach_session_status_activity_idx ON public.coach_session USING btree (status, last_activity_at DESC, coach_session_id DESC);
+COMMENT ON TABLE public.coach_session IS 'Durable AI Coach conversation sessions. Original messages are retained when older context is compacted.';
+
+-- Column comments
+
+COMMENT ON COLUMN public.coach_session.summary IS 'Compact context summary for future model requests; does not replace or delete original messages.';
+COMMENT ON COLUMN public.coach_session.summary_through_message_id IS 'Highest message identifier represented by summary after compaction.';
+COMMENT ON COLUMN public.coach_session.last_provider_response_id IS 'Opaque provider response identifier only; never contains credentials or prompt content.';
+
+
+-- public.coach_tool_call definition
+
+-- Drop table
+
+-- DROP TABLE public.coach_tool_call;
+
+CREATE TABLE public.coach_tool_call (
+	coach_tool_call_id int8 GENERATED ALWAYS AS IDENTITY( INCREMENT BY 1 MINVALUE 1 MAXVALUE 9223372036854775807 START 1 CACHE 1 NO CYCLE) NOT NULL,
+	coach_turn_id int8 NOT NULL,
+	sequence_number int4 NOT NULL,
+	provider_call_id text NULL,
+	tool_name text NOT NULL,
+	argument_summary jsonb NULL, -- Bounded sanitized argument metadata only; excludes secrets, SQL, and unrestricted request payloads.
+	result_summary jsonb NULL, -- Bounded sanitized result metadata only; excludes raw health data, raw Strava payloads, full tool output, and SQL.
+	status text DEFAULT 'started'::text NOT NULL,
+	started_at timestamptz DEFAULT now() NOT NULL,
+	completed_at timestamptz NULL,
+	elapsed_ms int8 NULL,
+	error_category text NULL,
+	created_at timestamptz DEFAULT now() NOT NULL,
+	CONSTRAINT coach_tool_call_argument_summary_object_check CHECK (((argument_summary IS NULL) OR (jsonb_typeof(argument_summary) = 'object'::text))),
+	CONSTRAINT coach_tool_call_coach_tool_call_id_not_null NOT NULL coach_tool_call_id,
+	CONSTRAINT coach_tool_call_coach_turn_id_not_null NOT NULL coach_turn_id,
+	CONSTRAINT coach_tool_call_created_at_not_null NOT NULL created_at,
+	CONSTRAINT coach_tool_call_elapsed_check CHECK (((elapsed_ms IS NULL) OR (elapsed_ms >= 0))),
+	CONSTRAINT coach_tool_call_error_category_not_blank CHECK (((error_category IS NULL) OR (btrim(error_category) <> ''::text))),
+	CONSTRAINT coach_tool_call_name_not_blank CHECK ((btrim(tool_name) <> ''::text)),
+	CONSTRAINT coach_tool_call_pkey PRIMARY KEY (coach_tool_call_id),
+	CONSTRAINT coach_tool_call_provider_call_id_not_blank CHECK (((provider_call_id IS NULL) OR (btrim(provider_call_id) <> ''::text))),
+	CONSTRAINT coach_tool_call_result_summary_object_check CHECK (((result_summary IS NULL) OR (jsonb_typeof(result_summary) = 'object'::text))),
+	CONSTRAINT coach_tool_call_sequence_check CHECK ((sequence_number > 0)),
+	CONSTRAINT coach_tool_call_sequence_number_not_null NOT NULL sequence_number,
+	CONSTRAINT coach_tool_call_started_at_not_null NOT NULL started_at,
+	CONSTRAINT coach_tool_call_status_check CHECK ((status = ANY (ARRAY['started'::text, 'completed'::text, 'failed'::text, 'timed_out'::text]))),
+	CONSTRAINT coach_tool_call_status_not_null NOT NULL status,
+	CONSTRAINT coach_tool_call_timestamp_state_check CHECK ((((status = 'started'::text) AND (completed_at IS NULL)) OR ((status <> 'started'::text) AND (completed_at IS NOT NULL) AND (completed_at >= started_at)))),
+	CONSTRAINT coach_tool_call_tool_name_not_null NOT NULL tool_name,
+	CONSTRAINT coach_tool_call_turn_sequence_unique UNIQUE (coach_turn_id, sequence_number)
+);
+CREATE INDEX coach_tool_call_turn_order_idx ON public.coach_tool_call USING btree (coach_turn_id, sequence_number);
+COMMENT ON TABLE public.coach_tool_call IS 'Sanitized metadata for each allowlisted read-only coaching tool execution within a Coach turn.';
+
+-- Column comments
+
+COMMENT ON COLUMN public.coach_tool_call.argument_summary IS 'Bounded sanitized argument metadata only; excludes secrets, SQL, and unrestricted request payloads.';
+COMMENT ON COLUMN public.coach_tool_call.result_summary IS 'Bounded sanitized result metadata only; excludes raw health data, raw Strava payloads, full tool output, and SQL.';
+
+
+-- public.coach_turn definition
+
+-- Drop table
+
+-- DROP TABLE public.coach_turn;
+
+CREATE TABLE public.coach_turn (
+	coach_turn_id int8 GENERATED ALWAYS AS IDENTITY( INCREMENT BY 1 MINVALUE 1 MAXVALUE 9223372036854775807 START 1 CACHE 1 NO CYCLE) NOT NULL,
+	coach_session_id int8 NOT NULL,
+	user_message_id int8 NOT NULL,
+	assistant_message_id int8 NULL,
+	request_id text NOT NULL,
+	provider text NULL,
+	model text NULL,
+	coaching_policy_version text NOT NULL,
+	status text DEFAULT 'started'::text NOT NULL,
+	started_at timestamptz DEFAULT now() NOT NULL,
+	completed_at timestamptz NULL,
+	elapsed_ms int8 NULL,
+	input_tokens int8 NULL,
+	cached_input_tokens int8 NULL,
+	output_tokens int8 NULL,
+	reasoning_tokens int8 NULL,
+	total_tokens int8 NULL,
+	estimated_cost_usd numeric(12, 6) NULL, -- Locally estimated API cost for the complete turn; provider billing remains authoritative.
+	effective_context_tokens int8 NULL, -- Tokens estimated or reported for the effective request context, not cumulative session history.
+	model_context_window_tokens int8 NULL,
+	tool_call_count int4 DEFAULT 0 NOT NULL,
+	provider_response_id text NULL,
+	previous_provider_response_id text NULL,
+	error_category text NULL, -- Sanitized failure category only; excludes stack traces, credentials, provider payloads, SQL, and environment values.
+	created_at timestamptz DEFAULT now() NOT NULL,
+	CONSTRAINT coach_turn_cached_input_tokens_check CHECK (((cached_input_tokens IS NULL) OR (cached_input_tokens >= 0))),
+	CONSTRAINT coach_turn_coach_session_id_not_null NOT NULL coach_session_id,
+	CONSTRAINT coach_turn_coach_turn_id_not_null NOT NULL coach_turn_id,
+	CONSTRAINT coach_turn_coaching_policy_version_not_null NOT NULL coaching_policy_version,
+	CONSTRAINT coach_turn_context_bounds_check CHECK (((effective_context_tokens IS NULL) OR (model_context_window_tokens IS NULL) OR (effective_context_tokens <= model_context_window_tokens))),
+	CONSTRAINT coach_turn_context_window_check CHECK (((model_context_window_tokens IS NULL) OR (model_context_window_tokens > 0))),
+	CONSTRAINT coach_turn_cost_check CHECK (((estimated_cost_usd IS NULL) OR (estimated_cost_usd >= (0)::numeric))),
+	CONSTRAINT coach_turn_created_at_not_null NOT NULL created_at,
+	CONSTRAINT coach_turn_effective_context_check CHECK (((effective_context_tokens IS NULL) OR (effective_context_tokens >= 0))),
+	CONSTRAINT coach_turn_elapsed_check CHECK (((elapsed_ms IS NULL) OR (elapsed_ms >= 0))),
+	CONSTRAINT coach_turn_error_category_not_blank CHECK (((error_category IS NULL) OR (btrim(error_category) <> ''::text))),
+	CONSTRAINT coach_turn_input_tokens_check CHECK (((input_tokens IS NULL) OR (input_tokens >= 0))),
+	CONSTRAINT coach_turn_model_not_blank CHECK (((model IS NULL) OR (btrim(model) <> ''::text))),
+	CONSTRAINT coach_turn_output_tokens_check CHECK (((output_tokens IS NULL) OR (output_tokens >= 0))),
+	CONSTRAINT coach_turn_pkey PRIMARY KEY (coach_turn_id),
+	CONSTRAINT coach_turn_policy_version_not_blank CHECK ((btrim(coaching_policy_version) <> ''::text)),
+	CONSTRAINT coach_turn_previous_response_not_blank CHECK (((previous_provider_response_id IS NULL) OR (btrim(previous_provider_response_id) <> ''::text))),
+	CONSTRAINT coach_turn_provider_not_blank CHECK (((provider IS NULL) OR (btrim(provider) <> ''::text))),
+	CONSTRAINT coach_turn_provider_response_not_blank CHECK (((provider_response_id IS NULL) OR (btrim(provider_response_id) <> ''::text))),
+	CONSTRAINT coach_turn_reasoning_tokens_check CHECK (((reasoning_tokens IS NULL) OR (reasoning_tokens >= 0))),
+	CONSTRAINT coach_turn_request_id_not_blank CHECK ((btrim(request_id) <> ''::text)),
+	CONSTRAINT coach_turn_request_id_not_null NOT NULL request_id,
+	CONSTRAINT coach_turn_request_id_unique UNIQUE (request_id),
+	CONSTRAINT coach_turn_started_at_not_null NOT NULL started_at,
+	CONSTRAINT coach_turn_status_check CHECK ((status = ANY (ARRAY['started'::text, 'completed'::text, 'failed'::text, 'timed_out'::text, 'cancelled'::text]))),
+	CONSTRAINT coach_turn_status_not_null NOT NULL status,
+	CONSTRAINT coach_turn_timestamp_state_check CHECK ((((status = 'started'::text) AND (completed_at IS NULL)) OR ((status <> 'started'::text) AND (completed_at IS NOT NULL) AND (completed_at >= started_at)))),
+	CONSTRAINT coach_turn_tool_call_count_check CHECK ((tool_call_count >= 0)),
+	CONSTRAINT coach_turn_tool_call_count_not_null NOT NULL tool_call_count,
+	CONSTRAINT coach_turn_total_tokens_check CHECK (((total_tokens IS NULL) OR (total_tokens >= 0))),
+	CONSTRAINT coach_turn_user_message_id_not_null NOT NULL user_message_id
+);
+CREATE INDEX coach_turn_model_completed_idx ON public.coach_turn USING btree (model, completed_at DESC) WHERE (status = 'completed'::text);
+CREATE INDEX coach_turn_session_recent_idx ON public.coach_turn USING btree (coach_session_id, started_at DESC, coach_turn_id DESC);
+COMMENT ON TABLE public.coach_turn IS 'One complete user-to-Coach orchestration cycle, including terminal failures, aggregate provider usage, estimated cost, and tool count.';
+
+-- Column comments
+
+COMMENT ON COLUMN public.coach_turn.estimated_cost_usd IS 'Locally estimated API cost for the complete turn; provider billing remains authoritative.';
+COMMENT ON COLUMN public.coach_turn.effective_context_tokens IS 'Tokens estimated or reported for the effective request context, not cumulative session history.';
+COMMENT ON COLUMN public.coach_turn.error_category IS 'Sanitized failure category only; excludes stack traces, credentials, provider payloads, SQL, and environment values.';
+
+
+-- public.coach_message foreign keys
+
+ALTER TABLE public.coach_message ADD CONSTRAINT coach_message_session_fkey FOREIGN KEY (coach_session_id) REFERENCES public.coach_session(coach_session_id) ON DELETE CASCADE;
+
+
+-- public.coach_session foreign keys
+
+ALTER TABLE public.coach_session ADD CONSTRAINT coach_session_summary_message_fkey FOREIGN KEY (summary_through_message_id) REFERENCES public.coach_message(coach_message_id) ON DELETE SET NULL;
+
+
+-- public.coach_tool_call foreign keys
+
+ALTER TABLE public.coach_tool_call ADD CONSTRAINT coach_tool_call_turn_fkey FOREIGN KEY (coach_turn_id) REFERENCES public.coach_turn(coach_turn_id) ON DELETE CASCADE;
+
+
+-- public.coach_turn foreign keys
+
+ALTER TABLE public.coach_turn ADD CONSTRAINT coach_turn_assistant_message_fkey FOREIGN KEY (assistant_message_id) REFERENCES public.coach_message(coach_message_id) ON DELETE RESTRICT;
+ALTER TABLE public.coach_turn ADD CONSTRAINT coach_turn_session_fkey FOREIGN KEY (coach_session_id) REFERENCES public.coach_session(coach_session_id) ON DELETE CASCADE;
+ALTER TABLE public.coach_turn ADD CONSTRAINT coach_turn_user_message_fkey FOREIGN KEY (user_message_id) REFERENCES public.coach_message(coach_message_id) ON DELETE RESTRICT;
 
 
 -- public.weekly_zone_summary source
