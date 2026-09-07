@@ -35,8 +35,9 @@ import hmac
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from coach_context import build_coach_context
 from resync_activity import resync_activity
-from settings import get_config
+from settings import get_config, get_db_config
 
 app = FastAPI(title="Training API")
 CFG = get_config()
@@ -58,6 +59,19 @@ def health():
     Side effects: none.
     """
     return {"status": "ok", "service": "training-api"}
+
+
+@app.get("/internal/coach/context/current")
+def coach_context_endpoint(request: Request):
+    """Return a bounded, read-only snapshot of persisted coaching facts."""
+    provided_token = request.headers.get("X-Internal-Token")
+    if not provided_token or not hmac.compare_digest(provided_token, training_api_token):
+        return JSONResponse(status_code=401, content={"status": "error", "error": "Unauthorized"})
+
+    try:
+        return build_coach_context(get_db_config())
+    except Exception:
+        return JSONResponse(status_code=500, content={"status": "error", "error": "Coach context unavailable"})
 
 
 @app.post("/internal/activities/{activity_id}/resync")
