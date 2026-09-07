@@ -91,6 +91,34 @@ def _audit(cur, current_week):
     return header
 
 
+def _latest_completed_audit(cur, current_week):
+    header = _row(cur, """
+        SELECT week_start, audit_version, overall_grade, green_count, yellow_count,
+               red_count, audit_summary, next_week_action, source, computed_at,
+               reviewed_at, updated_at
+        FROM weekly_audit
+        WHERE week_start < %s
+        ORDER BY week_start DESC
+        LIMIT 1
+        """, (current_week,))
+    if not header:
+        return None
+    items = _rows(cur, """
+        SELECT item_key, item_label, status, summary, sort_order, source,
+               evidence_json, updated_at
+        FROM weekly_audit_item
+        WHERE week_start = %s
+        ORDER BY sort_order, item_key
+        """, (header["week_start"],))
+    header["items"] = [
+        {**item, "evidence_json": _bounded_json(item.get("evidence_json"))}
+        for item in items
+    ]
+    header["evaluation_state"] = "complete_week"
+    header["is_provisional"] = False
+    return header
+
+
 def _audit_history(cur, current_week):
     rows = _rows(cur, """
         SELECT week_start, overall_grade, green_count, yellow_count, red_count,
@@ -143,6 +171,8 @@ def _daily(cur, current_date):
     for row in rows:
         activities = row.get("other_activities")
         row["other_activities"] = _bounded_json(activities[:OTHER_ACTIVITY_LIMIT] if isinstance(activities, list) else activities)
+        if row.get("main_ride_rpe") == -1:
+            row["main_ride_rpe"] = None
     return rows
 
 
@@ -208,6 +238,8 @@ def _recovery(cur, current_date):
         for row in rows:
             target = result.setdefault(row["date"], {"date": row["date"]})
             target[value_column] = row.get(value_column)
+            if key == "sleep":
+                target["total_sleep_hr"] = row.get("total_sleep_hr")
             target[f"{key}_measured_at"] = row.get("measured_at")
             target[f"{key}_source"] = row.get("source")
             target[f"{key}_updated_at"] = row.get(update_column)
@@ -305,6 +337,7 @@ def build_coach_context(cfg):
                 LIMIT %s
                 """, (current_week, WEEKLY_ROWS))
             current_audit = _audit(cur, current_week)
+            latest_completed_audit = _latest_completed_audit(cur, current_week)
             audit_history = _audit_history(cur, current_week)
             fff = _fitness_fatigue_form(cur, current_date)
             recovery = _recovery(cur, current_date)
@@ -329,6 +362,14 @@ def build_coach_context(cfg):
     # Sunday remains an active, incomplete coaching week until it has ended.
     is_complete = current_date > current_week_end
     current_zone = next((row for row in zones if row["week_start"] == current_week), None)
+    if current_audit:
+        current_audit.update({
+            "evaluation_state": "complete_week" if is_complete else "partial_week",
+            "is_provisional": not is_complete,
+            "days_elapsed": days_elapsed,
+            "days_remaining": max(0, 7 - days_elapsed),
+            "data_through_date": data_through,
+        })
     current_commentary = next((row for row in commentary if row["week_start"] == current_week), None)
     current_flags = (
         {key: current_commentary.get(key) for key in ("is_travel_week", "is_sick_week", "is_injury_week", "is_bike_park_week", "is_recovery_week", "is_goal_week")}
@@ -357,15 +398,18 @@ def build_coach_context(cfg):
         "coverage": {"detailed_daily_days_returned": len(daily), "weekly_rows_returned": len(weekly),
                      "fitness_fatigue_form_days_returned": len(fff["history"]), "recovery_days_requested": RECOVERY_DAYS,
                      "sleep_days_measured": sum(1 for row in recovery if row.get("sleep_score") is not None),
+                     "sleep_duration_days_measured": sum(1 for row in recovery if row.get("total_sleep_hr") is not None),
                      "hrv_days_measured": sum(1 for row in recovery if row.get("hrv_sdnn_ms") is not None),
                      "rhr_days_measured": sum(1 for row in recovery if row.get("rhr_bpm") is not None),
                      "weight_days_measured": sum(1 for row in recovery if row.get("weight_lb") is not None),
                      "steps_days_measured": sum(1 for row in recovery if row.get("steps") is not None),
                      "falls_days_measured": sum(1 for row in recovery if row.get("falls") is not None),
                      "commentary_weeks_available": len(commentary), "current_audit_available": current_audit is not None,
+                     "latest_completed_audit_available": latest_completed_audit is not None,
                      "current_zone_coverage_pct": current_zone["zone_coverage_pct"] if current_zone else None,
                      "missing_sources": [name for name, value in freshness.items() if not value.get("latest_date") and not value.get("latest_updated_at")] + (["current_weekly_audit"] if current_audit is None else [])},
         "current_weekly_audit": current_audit,
+        "latest_completed_weekly_audit": latest_completed_audit,
         "audit_history": audit_history,
         "weekly_load_history": weekly,
         "weekly_tid_history": zones,
