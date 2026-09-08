@@ -119,6 +119,36 @@ COMMENT ON COLUMN public.app_settings.default_sync_days_back IS 'Default number 
 COMMENT ON COLUMN public.app_settings.updated_at IS 'Timestamp of the most recent settings update.';
 
 
+-- public.ai_coach_settings definition
+
+-- Dedicated singleton settings for the Embedded AI Coach. Provider credentials and deployment settings remain outside the database.
+
+CREATE TABLE public.ai_coach_settings (
+	settings_id int2 NOT NULL,
+	monthly_cost_limit_usd numeric(10, 2) DEFAULT 5.00 NOT NULL,
+	max_turn_cost_usd numeric(10, 2) DEFAULT 0.25 NOT NULL,
+	max_output_tokens int4 DEFAULT 1200 NOT NULL,
+	reasoning_effort text DEFAULT 'low'::text NOT NULL,
+	updated_at timestamptz DEFAULT now() NOT NULL,
+	CONSTRAINT ai_coach_settings_pkey PRIMARY KEY (settings_id),
+	CONSTRAINT ai_coach_settings_singleton_check CHECK ((settings_id = 1)),
+	CONSTRAINT ai_coach_settings_monthly_cost_check CHECK (((monthly_cost_limit_usd >= 0.00) AND (monthly_cost_limit_usd <= 100.00))),
+	CONSTRAINT ai_coach_settings_turn_cost_check CHECK (((max_turn_cost_usd >= 0.01) AND (max_turn_cost_usd <= 5.00))),
+	CONSTRAINT ai_coach_settings_output_tokens_check CHECK (((max_output_tokens >= 1) AND (max_output_tokens <= 32000))),
+	CONSTRAINT ai_coach_settings_reasoning_effort_check CHECK ((reasoning_effort = ANY (ARRAY['none'::text, 'low'::text, 'medium'::text, 'high'::text])))
+);
+COMMENT ON TABLE public.ai_coach_settings IS 'Singleton non-secret editable settings for the Embedded AI Coach. Provider credentials and deployment settings remain outside the database.';
+
+-- Column comments
+
+COMMENT ON COLUMN public.ai_coach_settings.settings_id IS 'Singleton identifier. The only supported value is 1.';
+COMMENT ON COLUMN public.ai_coach_settings.monthly_cost_limit_usd IS 'Application-recorded monthly cost ceiling in USD. Database range is 0.00 through 100.00; application hard ceilings remain authoritative.';
+COMMENT ON COLUMN public.ai_coach_settings.max_turn_cost_usd IS 'Maximum estimated cost allowed for one Coach turn in USD. Database range is 0.01 through 5.00; application hard ceilings remain authoritative.';
+COMMENT ON COLUMN public.ai_coach_settings.max_output_tokens IS 'Maximum output tokens requested for a normal Coach turn. Database range is 1 through 10000; application hard ceilings remain authoritative.';
+COMMENT ON COLUMN public.ai_coach_settings.reasoning_effort IS 'Normal Coach reasoning effort. Supported values are none, low, medium, and high.';
+COMMENT ON COLUMN public.ai_coach_settings.updated_at IS 'Timestamp of the most recent settings update. Future application updates should set this explicitly with now().';
+
+
 -- public.daily_fitness_fatigue definition
 
 -- Drop table
