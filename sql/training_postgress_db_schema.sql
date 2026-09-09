@@ -149,6 +149,46 @@ COMMENT ON COLUMN public.ai_coach_settings.reasoning_effort IS 'Normal Coach rea
 COMMENT ON COLUMN public.ai_coach_settings.updated_at IS 'Timestamp of the most recent settings update. Future application updates should set this explicitly with now().';
 
 
+-- public.ai_coach_custom_instructions definition
+
+-- Dedicated bounded singleton for durable, user-authored Coach instructions. Product policy, authoritative Training Intelligence, and Durable Memories remain separate concerns.
+
+CREATE TABLE public.ai_coach_custom_instructions (
+	instructions_id int2 NOT NULL,
+	coaching_priorities text DEFAULT ''::text NOT NULL,
+	safety_progression_rules text DEFAULT ''::text NOT NULL,
+	training_approach text DEFAULT ''::text NOT NULL,
+	recovery_adjustment_rules text DEFAULT ''::text NOT NULL,
+	communication_style text DEFAULT ''::text NOT NULL,
+	planning_preferences text DEFAULT ''::text NOT NULL,
+	other_instructions text DEFAULT ''::text NOT NULL,
+	updated_at timestamptz DEFAULT now() NOT NULL,
+	CONSTRAINT ai_coach_custom_instructions_pkey PRIMARY KEY (instructions_id),
+	CONSTRAINT ai_coach_custom_instructions_singleton_check CHECK ((instructions_id = 1)),
+	CONSTRAINT ai_coach_custom_instructions_coaching_priorities_length_check CHECK ((char_length(coaching_priorities) <= 1500)),
+	CONSTRAINT ai_coach_custom_instructions_safety_progression_rules_length_check CHECK ((char_length(safety_progression_rules) <= 1500)),
+	CONSTRAINT ai_coach_custom_instructions_training_approach_length_check CHECK ((char_length(training_approach) <= 1500)),
+	CONSTRAINT ai_coach_custom_instructions_recovery_adjustment_rules_length_check CHECK ((char_length(recovery_adjustment_rules) <= 1500)),
+	CONSTRAINT ai_coach_custom_instructions_communication_style_length_check CHECK ((char_length(communication_style) <= 1500)),
+	CONSTRAINT ai_coach_custom_instructions_planning_preferences_length_check CHECK ((char_length(planning_preferences) <= 1500)),
+	CONSTRAINT ai_coach_custom_instructions_other_instructions_length_check CHECK ((char_length(other_instructions) <= 1500)),
+	CONSTRAINT ai_coach_custom_instructions_combined_length_check CHECK (((char_length(coaching_priorities) + char_length(safety_progression_rules) + char_length(training_approach) + char_length(recovery_adjustment_rules) + char_length(communication_style) + char_length(planning_preferences) + char_length(other_instructions)) <= 8000))
+);
+COMMENT ON TABLE public.ai_coach_custom_instructions IS 'Singleton durable Custom Instructions profile for AI Coach. These stable preferences do not replace product policy, authoritative Training Intelligence, or Durable Memories.';
+
+-- Column comments
+
+COMMENT ON COLUMN public.ai_coach_custom_instructions.instructions_id IS 'Singleton identifier. The only supported value is 1.';
+COMMENT ON COLUMN public.ai_coach_custom_instructions.coaching_priorities IS 'Stable priorities that determine what wins when coaching goals conflict, such as safety, consistency, availability, enjoyment, strength, and sustainable performance.';
+COMMENT ON COLUMN public.ai_coach_custom_instructions.safety_progression_rules IS 'Stable safety thresholds and overrides, such as ramp review, poor-sleep adjustments, travel recovery, and clinician or injury overrides.';
+COMMENT ON COLUMN public.ai_coach_custom_instructions.training_approach IS 'Durable training model and preferences, including volume, strength, intentional intensity, technical demands, and avoidance of generic advice.';
+COMMENT ON COLUMN public.ai_coach_custom_instructions.recovery_adjustment_rules IS 'Stable recommendation adjustments for sleep, soreness, illness, travel, missing subjective context, weight changes, and reduced training.';
+COMMENT ON COLUMN public.ai_coach_custom_instructions.communication_style IS 'Preferred response tone and format, including concise summaries, actionable bullets, direct language, meaningful risk sections, explicit dates, and concise-format requests.';
+COMMENT ON COLUMN public.ai_coach_custom_instructions.planning_preferences IS 'Practical planning preferences, including time estimates, strength preservation, life stress, modified alternatives, fueling cues, enjoyment, and sustainable progression.';
+COMMENT ON COLUMN public.ai_coach_custom_instructions.other_instructions IS 'Optional bounded instructions that do not fit the six main sections. This is not a memory dump, weekly plan, temporary injury note, or unlimited second prompt.';
+COMMENT ON COLUMN public.ai_coach_custom_instructions.updated_at IS 'Timestamp of the most recent profile update. Future application updates should set this explicitly with now().';
+
+
 -- public.daily_fitness_fatigue definition
 
 -- Drop table
