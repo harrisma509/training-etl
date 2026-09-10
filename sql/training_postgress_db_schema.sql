@@ -1302,6 +1302,29 @@ COMMENT ON COLUMN public.coach_turn.effective_context_tokens IS 'Tokens estimate
 COMMENT ON COLUMN public.coach_turn.error_category IS 'Sanitized failure category only; excludes stack traces, credentials, provider payloads, SQL, and environment values.';
 
 
+-- public.ai_coach_turn_context_receipts definition
+
+-- Optional immutable, versioned snapshot of bounded Coach context assembled for one turn.
+
+CREATE TABLE public.ai_coach_turn_context_receipts (
+	coach_turn_id int8 NOT NULL,
+	receipt_version int2 DEFAULT 1 NOT NULL,
+	receipt_json jsonb NOT NULL,
+	created_at timestamptz DEFAULT now() NOT NULL,
+	CONSTRAINT ai_coach_turn_context_receipts_pkey PRIMARY KEY (coach_turn_id),
+	CONSTRAINT ai_coach_turn_context_receipts_receipt_version_check CHECK ((receipt_version >= 1)),
+	CONSTRAINT ai_coach_turn_context_receipts_receipt_json_object_check CHECK ((jsonb_typeof(receipt_json) = 'object'::text))
+);
+COMMENT ON TABLE public.ai_coach_turn_context_receipts IS 'Optional immutable, versioned snapshot of bounded Coach context assembled for one turn. Not a prompt archive, provider payload log, or debug log.';
+
+-- Column comments
+
+COMMENT ON COLUMN public.ai_coach_turn_context_receipts.coach_turn_id IS 'One-to-one reference to the Coach turn whose assembled context this receipt records. The primary key enforces at most one receipt per turn.';
+COMMENT ON COLUMN public.ai_coach_turn_context_receipts.receipt_version IS 'Version of the receipt JSON document shape. V1.1 application writes use version 1.';
+COMMENT ON COLUMN public.ai_coach_turn_context_receipts.receipt_json IS 'Required bounded allowlisted receipt object. It excludes full memory text, prompts, raw provider payloads, SQL, credentials, routing scores, and full Training Intelligence context.';
+COMMENT ON COLUMN public.ai_coach_turn_context_receipts.created_at IS 'Creation timestamp for immutable application evidence. There is intentionally no updated_at column or trigger in V1.1.';
+
+
 -- public.coach_message foreign keys
 
 ALTER TABLE public.coach_message ADD CONSTRAINT coach_message_session_fkey FOREIGN KEY (coach_session_id) REFERENCES public.coach_session(coach_session_id) ON DELETE CASCADE;
@@ -1322,6 +1345,11 @@ ALTER TABLE public.coach_tool_call ADD CONSTRAINT coach_tool_call_turn_fkey FORE
 ALTER TABLE public.coach_turn ADD CONSTRAINT coach_turn_assistant_message_fkey FOREIGN KEY (assistant_message_id) REFERENCES public.coach_message(coach_message_id) ON DELETE RESTRICT;
 ALTER TABLE public.coach_turn ADD CONSTRAINT coach_turn_session_fkey FOREIGN KEY (coach_session_id) REFERENCES public.coach_session(coach_session_id) ON DELETE CASCADE;
 ALTER TABLE public.coach_turn ADD CONSTRAINT coach_turn_user_message_fkey FOREIGN KEY (user_message_id) REFERENCES public.coach_message(coach_message_id) ON DELETE RESTRICT;
+
+
+-- public.ai_coach_turn_context_receipts foreign keys
+
+ALTER TABLE public.ai_coach_turn_context_receipts ADD CONSTRAINT ai_coach_turn_context_receipts_turn_fkey FOREIGN KEY (coach_turn_id) REFERENCES public.coach_turn(coach_turn_id) ON DELETE CASCADE;
 
 
 -- public.weekly_zone_summary source
