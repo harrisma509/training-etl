@@ -32,6 +32,8 @@ Existing `unittest.TestCase` tests run through pytest. The default suite uses fa
 
 On Windows, activate the repository virtual environment first and use `python -m pytest -q` when `python3` is unavailable.
 
+For the complete testing and AI-assisted workflow, see [docs/TESTING_GUIDE.md](docs/TESTING_GUIDE.md).
+
 ## Daily Fitness, Fatigue, and Form rebuild
 
 The complete daily Fitness/Fatigue/Form series can be previewed or populated
