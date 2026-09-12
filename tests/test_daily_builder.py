@@ -1,5 +1,6 @@
 import sys
 import unittest
+import json
 from unittest.mock import patch
 from pathlib import Path
 
@@ -182,7 +183,10 @@ class DailyBuilderOtherActivitiesTests(unittest.TestCase):
         self.assertEqual(len(cur.calls), 1)
         sql, params = cur.calls[0]
         self.assertIn("other_activities", sql)
-        self.assertEqual(params["other_activities"], row["other_activities"])
+        self.assertEqual(
+            json.loads(params["other_activities"]),
+            row["other_activities"],
+        )
         self.assertIn("ON CONFLICT (date)", sql)
         self.assertIn("other_activities = EXCLUDED.other_activities", sql)
 
