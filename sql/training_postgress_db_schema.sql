@@ -4,6 +4,15 @@ CREATE SCHEMA public AUTHORIZATION pg_database_owner;
 
 COMMENT ON SCHEMA public IS 'standard public schema';
 
+-- DROP SEQUENCE public.ai_coach_memories_memory_id_seq;
+
+CREATE SEQUENCE public.ai_coach_memories_memory_id_seq
+	INCREMENT BY 1
+	MINVALUE 1
+	MAXVALUE 9223372036854775807
+	START 1
+	CACHE 1
+	NO CYCLE;
 -- DROP SEQUENCE public.coach_message_coach_message_id_seq;
 
 CREATE SEQUENCE public.coach_message_coach_message_id_seq
@@ -93,7 +102,146 @@ CREATE SEQUENCE public.weekly_audit_item_id_seq
 	MAXVALUE 9223372036854775807
 	START 1
 	CACHE 1
-	NO CYCLE;-- public.app_settings definition
+	NO CYCLE;-- public.ai_coach_custom_instructions definition
+
+-- Drop table
+
+-- DROP TABLE public.ai_coach_custom_instructions;
+
+CREATE TABLE public.ai_coach_custom_instructions (
+	instructions_id int2 NOT NULL, -- Singleton identifier. The only supported value is 1.
+	coaching_priorities text DEFAULT ''::text NOT NULL, -- Stable priorities that determine what wins when coaching goals conflict, such as safety, consistency, availability, enjoyment, strength, and sustainable performance.
+	safety_progression_rules text DEFAULT ''::text NOT NULL, -- Stable safety thresholds and overrides, such as ramp review, poor-sleep adjustments, travel recovery, and clinician or injury overrides.
+	training_approach text DEFAULT ''::text NOT NULL, -- Durable training model and preferences, including volume, strength, intentional intensity, technical demands, and avoidance of generic advice.
+	recovery_adjustment_rules text DEFAULT ''::text NOT NULL, -- Stable recommendation adjustments for sleep, soreness, illness, travel, missing subjective context, weight changes, and reduced training.
+	communication_style text DEFAULT ''::text NOT NULL, -- Preferred response tone and format, including concise summaries, actionable bullets, direct language, meaningful risk sections, explicit dates, and concise-format requests.
+	planning_preferences text DEFAULT ''::text NOT NULL, -- Practical planning preferences, including time estimates, strength preservation, life stress, modified alternatives, fueling cues, enjoyment, and sustainable progression.
+	other_instructions text DEFAULT ''::text NOT NULL, -- Optional bounded instructions that do not fit the six main sections. This is not a memory dump, weekly plan, temporary injury note, or unlimited second prompt.
+	updated_at timestamptz DEFAULT now() NOT NULL, -- Timestamp of the most recent profile update. Future application updates should set this explicitly with now().
+	CONSTRAINT ai_coach_custom_instructions_coaching_priorities_length_check CHECK ((char_length(coaching_priorities) <= 1500)),
+	CONSTRAINT ai_coach_custom_instructions_coaching_priorities_not_null NOT NULL coaching_priorities,
+	CONSTRAINT ai_coach_custom_instructions_combined_length_check CHECK ((((((((char_length(coaching_priorities) + char_length(safety_progression_rules)) + char_length(training_approach)) + char_length(recovery_adjustment_rules)) + char_length(communication_style)) + char_length(planning_preferences)) + char_length(other_instructions)) <= 8000)),
+	CONSTRAINT ai_coach_custom_instructions_communication_style_length_check CHECK ((char_length(communication_style) <= 1500)),
+	CONSTRAINT ai_coach_custom_instructions_communication_style_not_null NOT NULL communication_style,
+	CONSTRAINT ai_coach_custom_instructions_instructions_id_not_null NOT NULL instructions_id,
+	CONSTRAINT ai_coach_custom_instructions_other_instructions_length_check CHECK ((char_length(other_instructions) <= 1500)),
+	CONSTRAINT ai_coach_custom_instructions_other_instructions_not_null NOT NULL other_instructions,
+	CONSTRAINT ai_coach_custom_instructions_pkey PRIMARY KEY (instructions_id),
+	CONSTRAINT ai_coach_custom_instructions_planning_preferences_length_check CHECK ((char_length(planning_preferences) <= 1500)),
+	CONSTRAINT ai_coach_custom_instructions_planning_preferences_not_null NOT NULL planning_preferences,
+	CONSTRAINT ai_coach_custom_instructions_recovery_adjustment_rules_length_c CHECK ((char_length(recovery_adjustment_rules) <= 1500)),
+	CONSTRAINT ai_coach_custom_instructions_recovery_adjustment_rules_not_null NOT NULL recovery_adjustment_rules,
+	CONSTRAINT ai_coach_custom_instructions_safety_progression_rules_length_ch CHECK ((char_length(safety_progression_rules) <= 1500)),
+	CONSTRAINT ai_coach_custom_instructions_safety_progression_rules_not_null NOT NULL safety_progression_rules,
+	CONSTRAINT ai_coach_custom_instructions_singleton_check CHECK ((instructions_id = 1)),
+	CONSTRAINT ai_coach_custom_instructions_training_approach_length_check CHECK ((char_length(training_approach) <= 1500)),
+	CONSTRAINT ai_coach_custom_instructions_training_approach_not_null NOT NULL training_approach,
+	CONSTRAINT ai_coach_custom_instructions_updated_at_not_null NOT NULL updated_at
+);
+COMMENT ON TABLE public.ai_coach_custom_instructions IS 'Singleton durable Custom Instructions profile for AI Coach. These stable preferences do not replace product policy, authoritative Training Intelligence, or Durable Memories.';
+
+-- Column comments
+
+COMMENT ON COLUMN public.ai_coach_custom_instructions.instructions_id IS 'Singleton identifier. The only supported value is 1.';
+COMMENT ON COLUMN public.ai_coach_custom_instructions.coaching_priorities IS 'Stable priorities that determine what wins when coaching goals conflict, such as safety, consistency, availability, enjoyment, strength, and sustainable performance.';
+COMMENT ON COLUMN public.ai_coach_custom_instructions.safety_progression_rules IS 'Stable safety thresholds and overrides, such as ramp review, poor-sleep adjustments, travel recovery, and clinician or injury overrides.';
+COMMENT ON COLUMN public.ai_coach_custom_instructions.training_approach IS 'Durable training model and preferences, including volume, strength, intentional intensity, technical demands, and avoidance of generic advice.';
+COMMENT ON COLUMN public.ai_coach_custom_instructions.recovery_adjustment_rules IS 'Stable recommendation adjustments for sleep, soreness, illness, travel, missing subjective context, weight changes, and reduced training.';
+COMMENT ON COLUMN public.ai_coach_custom_instructions.communication_style IS 'Preferred response tone and format, including concise summaries, actionable bullets, direct language, meaningful risk sections, explicit dates, and concise-format requests.';
+COMMENT ON COLUMN public.ai_coach_custom_instructions.planning_preferences IS 'Practical planning preferences, including time estimates, strength preservation, life stress, modified alternatives, fueling cues, enjoyment, and sustainable progression.';
+COMMENT ON COLUMN public.ai_coach_custom_instructions.other_instructions IS 'Optional bounded instructions that do not fit the six main sections. This is not a memory dump, weekly plan, temporary injury note, or unlimited second prompt.';
+COMMENT ON COLUMN public.ai_coach_custom_instructions.updated_at IS 'Timestamp of the most recent profile update. Future application updates should set this explicitly with now().';
+
+
+-- public.ai_coach_memories definition
+
+-- Drop table
+
+-- DROP TABLE public.ai_coach_memories;
+
+CREATE TABLE public.ai_coach_memories (
+	memory_id int8 GENERATED ALWAYS AS IDENTITY( INCREMENT BY 1 MINVALUE 1 MAXVALUE 9223372036854775807 START 1 CACHE 1 NO CYCLE) NOT NULL, -- Stable internal identifier for management and deterministic tie-breaking. This identifier is not included in the model-facing memory body.
+	memory_type text NOT NULL, -- Required lowercase controlled type: medical, safety, training_goal, schedule, event, equipment, preference, or lesson_learned.
+	title text NOT NULL, -- Short human-readable management label, limited to 120 characters. Future application validation normalizes and trims it.
+	memory_text text NOT NULL, -- Standalone human-authored fact with relational context, limited to 1,000 characters. Do not store HTML, compiled prompt text, secrets, SQL, or provider configuration.
+	applies_to _text NOT NULL, -- One or more lowercase controlled applicability scopes. Database checks enforce nonempty, non-NULL, approved values; the future application rejects duplicate scopes.
+	priority text DEFAULT 'normal'::text NOT NULL, -- Required lowercase controlled priority: critical, high, or normal. Defaults to normal.
+	effective_date date NULL, -- Optional local-calendar start date. A memory is eligible only when this is NULL or on/before the request local date.
+	expires_at timestamptz NULL, -- Optional expiration instant. A memory is eligible only when this is NULL or later than request generation. Date-order validation converts this instant to America/Denver.
+	is_active bool DEFAULT true NOT NULL, -- Application-managed active flag. Deactivation replaces hard delete in V1.1; expiration does not change this flag.
+	created_at timestamptz DEFAULT now() NOT NULL, -- Creation timestamp.
+	updated_at timestamptz DEFAULT now() NOT NULL, -- Most recent application update timestamp. Future updates set this explicitly with now(); no trigger is part of this contract.
+	CONSTRAINT ai_coach_memories_applies_to_allowed_values_check CHECK ((applies_to <@ ARRAY['all_training'::text, 'planning'::text, 'recovery'::text, 'strength'::text, 'weight'::text, 'mtb'::text, 'emtb'::text, 'bike_park'::text, 'gravel'::text, 'skiing'::text])),
+	CONSTRAINT ai_coach_memories_applies_to_no_nulls CHECK ((array_position(applies_to, NULL::text) IS NULL)),
+	CONSTRAINT ai_coach_memories_applies_to_not_empty CHECK ((cardinality(applies_to) > 0)),
+	CONSTRAINT ai_coach_memories_applies_to_not_null NOT NULL applies_to,
+	CONSTRAINT ai_coach_memories_created_at_not_null NOT NULL created_at,
+	CONSTRAINT ai_coach_memories_date_order_check CHECK (((effective_date IS NULL) OR (expires_at IS NULL) OR (effective_date <= ((expires_at AT TIME ZONE 'America/Denver'::text))::date))),
+	CONSTRAINT ai_coach_memories_is_active_not_null NOT NULL is_active,
+	CONSTRAINT ai_coach_memories_memory_id_not_null NOT NULL memory_id,
+	CONSTRAINT ai_coach_memories_memory_text_length_check CHECK ((char_length(memory_text) <= 1000)),
+	CONSTRAINT ai_coach_memories_memory_text_not_blank CHECK ((btrim(memory_text) <> ''::text)),
+	CONSTRAINT ai_coach_memories_memory_text_not_null NOT NULL memory_text,
+	CONSTRAINT ai_coach_memories_memory_type_check CHECK ((memory_type = ANY (ARRAY['medical'::text, 'safety'::text, 'training_goal'::text, 'schedule'::text, 'event'::text, 'equipment'::text, 'preference'::text, 'lesson_learned'::text]))),
+	CONSTRAINT ai_coach_memories_memory_type_not_null NOT NULL memory_type,
+	CONSTRAINT ai_coach_memories_pkey PRIMARY KEY (memory_id),
+	CONSTRAINT ai_coach_memories_priority_check CHECK ((priority = ANY (ARRAY['critical'::text, 'high'::text, 'normal'::text]))),
+	CONSTRAINT ai_coach_memories_priority_not_null NOT NULL priority,
+	CONSTRAINT ai_coach_memories_title_length_check CHECK ((char_length(title) <= 120)),
+	CONSTRAINT ai_coach_memories_title_not_blank CHECK ((btrim(title) <> ''::text)),
+	CONSTRAINT ai_coach_memories_title_not_null NOT NULL title,
+	CONSTRAINT ai_coach_memories_updated_at_not_null NOT NULL updated_at
+);
+COMMENT ON TABLE public.ai_coach_memories IS 'Manually curated Durable Memories for AI Coach. These selected background facts do not replace product policy, current authoritative Training Intelligence, clinician guidance, or bounded conversation context. Deactivation is the application removal mechanism.';
+
+-- Column comments
+
+COMMENT ON COLUMN public.ai_coach_memories.memory_id IS 'Stable internal identifier for management and deterministic tie-breaking. This identifier is not included in the model-facing memory body.';
+COMMENT ON COLUMN public.ai_coach_memories.memory_type IS 'Required lowercase controlled type: medical, safety, training_goal, schedule, event, equipment, preference, or lesson_learned.';
+COMMENT ON COLUMN public.ai_coach_memories.title IS 'Short human-readable management label, limited to 120 characters. Future application validation normalizes and trims it.';
+COMMENT ON COLUMN public.ai_coach_memories.memory_text IS 'Standalone human-authored fact with relational context, limited to 1,000 characters. Do not store HTML, compiled prompt text, secrets, SQL, or provider configuration.';
+COMMENT ON COLUMN public.ai_coach_memories.applies_to IS 'One or more lowercase controlled applicability scopes. Database checks enforce nonempty, non-NULL, approved values; the future application rejects duplicate scopes.';
+COMMENT ON COLUMN public.ai_coach_memories.priority IS 'Required lowercase controlled priority: critical, high, or normal. Defaults to normal.';
+COMMENT ON COLUMN public.ai_coach_memories.effective_date IS 'Optional local-calendar start date. A memory is eligible only when this is NULL or on/before the request local date.';
+COMMENT ON COLUMN public.ai_coach_memories.expires_at IS 'Optional expiration instant. A memory is eligible only when this is NULL or later than request generation. Date-order validation converts this instant to America/Denver.';
+COMMENT ON COLUMN public.ai_coach_memories.is_active IS 'Application-managed active flag. Deactivation replaces hard delete in V1.1; expiration does not change this flag.';
+COMMENT ON COLUMN public.ai_coach_memories.created_at IS 'Creation timestamp.';
+COMMENT ON COLUMN public.ai_coach_memories.updated_at IS 'Most recent application update timestamp. Future updates set this explicitly with now(); no trigger is part of this contract.';
+
+
+-- public.ai_coach_settings definition
+
+-- Drop table
+
+-- DROP TABLE public.ai_coach_settings;
+
+CREATE TABLE public.ai_coach_settings (
+	settings_id int2 NOT NULL,
+	monthly_cost_limit_usd numeric(10, 2) DEFAULT 5.00 NOT NULL,
+	max_turn_cost_usd numeric(10, 2) DEFAULT 0.25 NOT NULL,
+	max_output_tokens int4 DEFAULT 1200 NOT NULL,
+	reasoning_effort text DEFAULT 'low'::text NOT NULL,
+	updated_at timestamptz DEFAULT now() NOT NULL,
+	detailed_daily_history_days int4 DEFAULT 28 NOT NULL,
+	weekly_history_rows int4 DEFAULT 26 NOT NULL,
+	CONSTRAINT ai_coach_settings_detailed_daily_history_days_not_null NOT NULL detailed_daily_history_days,
+	CONSTRAINT ai_coach_settings_max_output_tokens_not_null NOT NULL max_output_tokens,
+	CONSTRAINT ai_coach_settings_max_turn_cost_usd_not_null NOT NULL max_turn_cost_usd,
+	CONSTRAINT ai_coach_settings_monthly_cost_check CHECK (((monthly_cost_limit_usd >= 0.00) AND (monthly_cost_limit_usd <= 100.00))),
+	CONSTRAINT ai_coach_settings_monthly_cost_limit_usd_not_null NOT NULL monthly_cost_limit_usd,
+	CONSTRAINT ai_coach_settings_output_tokens_check CHECK (((max_output_tokens >= 1) AND (max_output_tokens <= 32000))),
+	CONSTRAINT ai_coach_settings_pkey PRIMARY KEY (settings_id),
+	CONSTRAINT ai_coach_settings_reasoning_effort_check CHECK ((reasoning_effort = ANY (ARRAY['none'::text, 'low'::text, 'medium'::text, 'high'::text]))),
+	CONSTRAINT ai_coach_settings_reasoning_effort_not_null NOT NULL reasoning_effort,
+	CONSTRAINT ai_coach_settings_settings_id_not_null NOT NULL settings_id,
+	CONSTRAINT ai_coach_settings_singleton_check CHECK ((settings_id = 1)),
+	CONSTRAINT ai_coach_settings_turn_cost_check CHECK (((max_turn_cost_usd >= 0.01) AND (max_turn_cost_usd <= 5.00))),
+	CONSTRAINT ai_coach_settings_updated_at_not_null NOT NULL updated_at,
+	CONSTRAINT ai_coach_settings_weekly_history_rows_not_null NOT NULL weekly_history_rows
+);
+
+
+-- public.app_settings definition
 
 -- Drop table
 
@@ -117,121 +265,6 @@ COMMENT ON TABLE public.app_settings IS 'Singleton application settings used by 
 COMMENT ON COLUMN public.app_settings.settings_id IS 'Singleton identifier. The only supported value is 1.';
 COMMENT ON COLUMN public.app_settings.default_sync_days_back IS 'Default number of recent days copied into new full-sync requests. Valid range is 1 through 6000. Existing requests retain their stored days_back value.';
 COMMENT ON COLUMN public.app_settings.updated_at IS 'Timestamp of the most recent settings update.';
-
-
--- public.ai_coach_settings definition
-
--- Dedicated singleton settings for the Embedded AI Coach. Provider credentials and deployment settings remain outside the database.
-
-CREATE TABLE public.ai_coach_settings (
-	settings_id int2 NOT NULL,
-	monthly_cost_limit_usd numeric(10, 2) DEFAULT 5.00 NOT NULL,
-	max_turn_cost_usd numeric(10, 2) DEFAULT 0.25 NOT NULL,
-	max_output_tokens int4 DEFAULT 1200 NOT NULL,
-	reasoning_effort text DEFAULT 'low'::text NOT NULL,
-	updated_at timestamptz DEFAULT now() NOT NULL,
-	CONSTRAINT ai_coach_settings_pkey PRIMARY KEY (settings_id),
-	CONSTRAINT ai_coach_settings_singleton_check CHECK ((settings_id = 1)),
-	CONSTRAINT ai_coach_settings_monthly_cost_check CHECK (((monthly_cost_limit_usd >= 0.00) AND (monthly_cost_limit_usd <= 100.00))),
-	CONSTRAINT ai_coach_settings_turn_cost_check CHECK (((max_turn_cost_usd >= 0.01) AND (max_turn_cost_usd <= 5.00))),
-	CONSTRAINT ai_coach_settings_output_tokens_check CHECK (((max_output_tokens >= 1) AND (max_output_tokens <= 32000))),
-	CONSTRAINT ai_coach_settings_reasoning_effort_check CHECK ((reasoning_effort = ANY (ARRAY['none'::text, 'low'::text, 'medium'::text, 'high'::text])))
-);
-COMMENT ON TABLE public.ai_coach_settings IS 'Singleton non-secret editable settings for the Embedded AI Coach. Provider credentials and deployment settings remain outside the database.';
-
--- Column comments
-
-COMMENT ON COLUMN public.ai_coach_settings.settings_id IS 'Singleton identifier. The only supported value is 1.';
-COMMENT ON COLUMN public.ai_coach_settings.monthly_cost_limit_usd IS 'Application-recorded monthly cost ceiling in USD. Database range is 0.00 through 100.00; application hard ceilings remain authoritative.';
-COMMENT ON COLUMN public.ai_coach_settings.max_turn_cost_usd IS 'Maximum estimated cost allowed for one Coach turn in USD. Database range is 0.01 through 5.00; application hard ceilings remain authoritative.';
-COMMENT ON COLUMN public.ai_coach_settings.max_output_tokens IS 'Maximum output tokens requested for a normal Coach turn. Database range is 1 through 10000; application hard ceilings remain authoritative.';
-COMMENT ON COLUMN public.ai_coach_settings.reasoning_effort IS 'Normal Coach reasoning effort. Supported values are none, low, medium, and high.';
-COMMENT ON COLUMN public.ai_coach_settings.updated_at IS 'Timestamp of the most recent settings update. Future application updates should set this explicitly with now().';
-
-
--- public.ai_coach_custom_instructions definition
-
--- Dedicated bounded singleton for durable, user-authored Coach instructions. Product policy, authoritative Training Intelligence, and Durable Memories remain separate concerns.
-
-CREATE TABLE public.ai_coach_custom_instructions (
-	instructions_id int2 NOT NULL,
-	coaching_priorities text DEFAULT ''::text NOT NULL,
-	safety_progression_rules text DEFAULT ''::text NOT NULL,
-	training_approach text DEFAULT ''::text NOT NULL,
-	recovery_adjustment_rules text DEFAULT ''::text NOT NULL,
-	communication_style text DEFAULT ''::text NOT NULL,
-	planning_preferences text DEFAULT ''::text NOT NULL,
-	other_instructions text DEFAULT ''::text NOT NULL,
-	updated_at timestamptz DEFAULT now() NOT NULL,
-	CONSTRAINT ai_coach_custom_instructions_pkey PRIMARY KEY (instructions_id),
-	CONSTRAINT ai_coach_custom_instructions_singleton_check CHECK ((instructions_id = 1)),
-	CONSTRAINT ai_coach_custom_instructions_coaching_priorities_length_check CHECK ((char_length(coaching_priorities) <= 1500)),
-	CONSTRAINT ai_coach_custom_instructions_safety_progression_rules_length_check CHECK ((char_length(safety_progression_rules) <= 1500)),
-	CONSTRAINT ai_coach_custom_instructions_training_approach_length_check CHECK ((char_length(training_approach) <= 1500)),
-	CONSTRAINT ai_coach_custom_instructions_recovery_adjustment_rules_length_check CHECK ((char_length(recovery_adjustment_rules) <= 1500)),
-	CONSTRAINT ai_coach_custom_instructions_communication_style_length_check CHECK ((char_length(communication_style) <= 1500)),
-	CONSTRAINT ai_coach_custom_instructions_planning_preferences_length_check CHECK ((char_length(planning_preferences) <= 1500)),
-	CONSTRAINT ai_coach_custom_instructions_other_instructions_length_check CHECK ((char_length(other_instructions) <= 1500)),
-	CONSTRAINT ai_coach_custom_instructions_combined_length_check CHECK (((char_length(coaching_priorities) + char_length(safety_progression_rules) + char_length(training_approach) + char_length(recovery_adjustment_rules) + char_length(communication_style) + char_length(planning_preferences) + char_length(other_instructions)) <= 8000))
-);
-COMMENT ON TABLE public.ai_coach_custom_instructions IS 'Singleton durable Custom Instructions profile for AI Coach. These stable preferences do not replace product policy, authoritative Training Intelligence, or Durable Memories.';
-
--- Column comments
-
-COMMENT ON COLUMN public.ai_coach_custom_instructions.instructions_id IS 'Singleton identifier. The only supported value is 1.';
-COMMENT ON COLUMN public.ai_coach_custom_instructions.coaching_priorities IS 'Stable priorities that determine what wins when coaching goals conflict, such as safety, consistency, availability, enjoyment, strength, and sustainable performance.';
-COMMENT ON COLUMN public.ai_coach_custom_instructions.safety_progression_rules IS 'Stable safety thresholds and overrides, such as ramp review, poor-sleep adjustments, travel recovery, and clinician or injury overrides.';
-COMMENT ON COLUMN public.ai_coach_custom_instructions.training_approach IS 'Durable training model and preferences, including volume, strength, intentional intensity, technical demands, and avoidance of generic advice.';
-COMMENT ON COLUMN public.ai_coach_custom_instructions.recovery_adjustment_rules IS 'Stable recommendation adjustments for sleep, soreness, illness, travel, missing subjective context, weight changes, and reduced training.';
-COMMENT ON COLUMN public.ai_coach_custom_instructions.communication_style IS 'Preferred response tone and format, including concise summaries, actionable bullets, direct language, meaningful risk sections, explicit dates, and concise-format requests.';
-COMMENT ON COLUMN public.ai_coach_custom_instructions.planning_preferences IS 'Practical planning preferences, including time estimates, strength preservation, life stress, modified alternatives, fueling cues, enjoyment, and sustainable progression.';
-COMMENT ON COLUMN public.ai_coach_custom_instructions.other_instructions IS 'Optional bounded instructions that do not fit the six main sections. This is not a memory dump, weekly plan, temporary injury note, or unlimited second prompt.';
-COMMENT ON COLUMN public.ai_coach_custom_instructions.updated_at IS 'Timestamp of the most recent profile update. Future application updates should set this explicitly with now().';
-
-
--- public.ai_coach_memories definition
-
--- Manually curated Durable Memories. Product policy, current authoritative Training Intelligence, clinician guidance, and bounded conversation context remain higher-authority concerns.
-
-CREATE TABLE public.ai_coach_memories (
-	memory_id int8 GENERATED ALWAYS AS IDENTITY( INCREMENT BY 1 MINVALUE 1 MAXVALUE 9223372036854775807 START 1 CACHE 1 NO CYCLE) NOT NULL,
-	memory_type text NOT NULL,
-	title text NOT NULL,
-	memory_text text NOT NULL,
-	applies_to _text NOT NULL,
-	priority text DEFAULT 'normal'::text NOT NULL,
-	effective_date date NULL,
-	expires_at timestamptz NULL,
-	is_active bool DEFAULT true NOT NULL,
-	created_at timestamptz DEFAULT now() NOT NULL,
-	updated_at timestamptz DEFAULT now() NOT NULL,
-	CONSTRAINT ai_coach_memories_memory_type_check CHECK ((memory_type = ANY (ARRAY['medical'::text, 'safety'::text, 'training_goal'::text, 'schedule'::text, 'event'::text, 'equipment'::text, 'preference'::text, 'lesson_learned'::text]))),
-	CONSTRAINT ai_coach_memories_title_not_blank CHECK ((btrim(title) <> ''::text)),
-	CONSTRAINT ai_coach_memories_title_length_check CHECK ((char_length(title) <= 120)),
-	CONSTRAINT ai_coach_memories_memory_text_not_blank CHECK ((btrim(memory_text) <> ''::text)),
-	CONSTRAINT ai_coach_memories_memory_text_length_check CHECK ((char_length(memory_text) <= 1000)),
-	CONSTRAINT ai_coach_memories_applies_to_not_empty CHECK ((cardinality(applies_to) > 0)),
-	CONSTRAINT ai_coach_memories_applies_to_no_nulls CHECK ((array_position(applies_to, NULL::text) IS NULL)),
-	CONSTRAINT ai_coach_memories_applies_to_allowed_values_check CHECK ((applies_to <@ ARRAY['all_training'::text, 'planning'::text, 'recovery'::text, 'strength'::text, 'weight'::text, 'mtb'::text, 'emtb'::text, 'bike_park'::text, 'gravel'::text, 'skiing'::text])),
-	CONSTRAINT ai_coach_memories_priority_check CHECK ((priority = ANY (ARRAY['critical'::text, 'high'::text, 'normal'::text]))),
-	CONSTRAINT ai_coach_memories_date_order_check CHECK (((effective_date IS NULL) OR (expires_at IS NULL) OR (effective_date <= ((expires_at AT TIME ZONE 'America/Denver'::text))::date))),
-	CONSTRAINT ai_coach_memories_pkey PRIMARY KEY (memory_id)
-);
-COMMENT ON TABLE public.ai_coach_memories IS 'Manually curated Durable Memories for AI Coach. These selected background facts do not replace product policy, current authoritative Training Intelligence, clinician guidance, or bounded conversation context. Deactivation is the application removal mechanism.';
-
--- Column comments
-
-COMMENT ON COLUMN public.ai_coach_memories.memory_id IS 'Stable internal identifier for management and deterministic tie-breaking. This identifier is not included in the model-facing memory body.';
-COMMENT ON COLUMN public.ai_coach_memories.memory_type IS 'Required lowercase controlled type: medical, safety, training_goal, schedule, event, equipment, preference, or lesson_learned.';
-COMMENT ON COLUMN public.ai_coach_memories.title IS 'Short human-readable management label, limited to 120 characters. Future application validation normalizes and trims it.';
-COMMENT ON COLUMN public.ai_coach_memories.memory_text IS 'Standalone human-authored fact with relational context, limited to 1,000 characters. Do not store HTML, compiled prompt text, secrets, SQL, or provider configuration.';
-COMMENT ON COLUMN public.ai_coach_memories.applies_to IS 'One or more lowercase controlled applicability scopes. Database checks enforce nonempty, non-NULL, approved values; the future application rejects duplicate scopes.';
-COMMENT ON COLUMN public.ai_coach_memories.priority IS 'Required lowercase controlled priority: critical, high, or normal. Defaults to normal.';
-COMMENT ON COLUMN public.ai_coach_memories.effective_date IS 'Optional local-calendar start date. A memory is eligible only when this is NULL or on/before the request local date.';
-COMMENT ON COLUMN public.ai_coach_memories.expires_at IS 'Optional expiration instant. A memory is eligible only when this is NULL or later than request generation. Date-order validation converts this instant to America/Denver.';
-COMMENT ON COLUMN public.ai_coach_memories.is_active IS 'Application-managed active flag. Deactivation replaces hard delete in V1.1; expiration does not change this flag.';
-COMMENT ON COLUMN public.ai_coach_memories.created_at IS 'Creation timestamp.';
-COMMENT ON COLUMN public.ai_coach_memories.updated_at IS 'Most recent application update timestamp. Future updates set this explicitly with now(); no trigger is part of this contract.';
 
 
 -- public.daily_fitness_fatigue definition
@@ -1095,6 +1128,35 @@ CREATE INDEX training_year_month_month_year_idx ON public.training_year_month US
 COMMENT ON TABLE public.training_year_month IS 'One row per calendar month containing imported and calculated monthly training facts.';
 
 
+-- public.ai_coach_turn_context_receipts definition
+
+-- Drop table
+
+-- DROP TABLE public.ai_coach_turn_context_receipts;
+
+CREATE TABLE public.ai_coach_turn_context_receipts (
+	coach_turn_id int8 NOT NULL, -- One-to-one reference to the Coach turn whose assembled context this receipt records. The primary key enforces at most one receipt per turn.
+	receipt_version int2 DEFAULT 1 NOT NULL, -- Version of the receipt JSON document shape. V1.1 application writes use version 1.
+	receipt_json jsonb NOT NULL, -- Required bounded allowlisted receipt object. It excludes full memory text, prompts, raw provider payloads, SQL, credentials, routing scores, and full Training Intelligence context.
+	created_at timestamptz DEFAULT now() NOT NULL, -- Creation timestamp for immutable application evidence. There is intentionally no updated_at column or trigger in V1.1.
+	CONSTRAINT ai_coach_turn_context_receipts_coach_turn_id_not_null NOT NULL coach_turn_id,
+	CONSTRAINT ai_coach_turn_context_receipts_created_at_not_null NOT NULL created_at,
+	CONSTRAINT ai_coach_turn_context_receipts_pkey PRIMARY KEY (coach_turn_id),
+	CONSTRAINT ai_coach_turn_context_receipts_receipt_json_not_null NOT NULL receipt_json,
+	CONSTRAINT ai_coach_turn_context_receipts_receipt_json_object_check CHECK ((jsonb_typeof(receipt_json) = 'object'::text)),
+	CONSTRAINT ai_coach_turn_context_receipts_receipt_version_check CHECK ((receipt_version >= 1)),
+	CONSTRAINT ai_coach_turn_context_receipts_receipt_version_not_null NOT NULL receipt_version
+);
+COMMENT ON TABLE public.ai_coach_turn_context_receipts IS 'Optional immutable, versioned snapshot of bounded Coach context assembled for one turn. Not a prompt archive, provider payload log, or debug log.';
+
+-- Column comments
+
+COMMENT ON COLUMN public.ai_coach_turn_context_receipts.coach_turn_id IS 'One-to-one reference to the Coach turn whose assembled context this receipt records. The primary key enforces at most one receipt per turn.';
+COMMENT ON COLUMN public.ai_coach_turn_context_receipts.receipt_version IS 'Version of the receipt JSON document shape. V1.1 application writes use version 1.';
+COMMENT ON COLUMN public.ai_coach_turn_context_receipts.receipt_json IS 'Required bounded allowlisted receipt object. It excludes full memory text, prompts, raw provider payloads, SQL, credentials, routing scores, and full Training Intelligence context.';
+COMMENT ON COLUMN public.ai_coach_turn_context_receipts.created_at IS 'Creation timestamp for immutable application evidence. There is intentionally no updated_at column or trigger in V1.1.';
+
+
 -- public.coach_message definition
 
 -- Drop table
@@ -1302,27 +1364,9 @@ COMMENT ON COLUMN public.coach_turn.effective_context_tokens IS 'Tokens estimate
 COMMENT ON COLUMN public.coach_turn.error_category IS 'Sanitized failure category only; excludes stack traces, credentials, provider payloads, SQL, and environment values.';
 
 
--- public.ai_coach_turn_context_receipts definition
+-- public.ai_coach_turn_context_receipts foreign keys
 
--- Optional immutable, versioned snapshot of bounded Coach context assembled for one turn.
-
-CREATE TABLE public.ai_coach_turn_context_receipts (
-	coach_turn_id int8 NOT NULL,
-	receipt_version int2 DEFAULT 1 NOT NULL,
-	receipt_json jsonb NOT NULL,
-	created_at timestamptz DEFAULT now() NOT NULL,
-	CONSTRAINT ai_coach_turn_context_receipts_pkey PRIMARY KEY (coach_turn_id),
-	CONSTRAINT ai_coach_turn_context_receipts_receipt_version_check CHECK ((receipt_version >= 1)),
-	CONSTRAINT ai_coach_turn_context_receipts_receipt_json_object_check CHECK ((jsonb_typeof(receipt_json) = 'object'::text))
-);
-COMMENT ON TABLE public.ai_coach_turn_context_receipts IS 'Optional immutable, versioned snapshot of bounded Coach context assembled for one turn. Not a prompt archive, provider payload log, or debug log.';
-
--- Column comments
-
-COMMENT ON COLUMN public.ai_coach_turn_context_receipts.coach_turn_id IS 'One-to-one reference to the Coach turn whose assembled context this receipt records. The primary key enforces at most one receipt per turn.';
-COMMENT ON COLUMN public.ai_coach_turn_context_receipts.receipt_version IS 'Version of the receipt JSON document shape. V1.1 application writes use version 1.';
-COMMENT ON COLUMN public.ai_coach_turn_context_receipts.receipt_json IS 'Required bounded allowlisted receipt object. It excludes full memory text, prompts, raw provider payloads, SQL, credentials, routing scores, and full Training Intelligence context.';
-COMMENT ON COLUMN public.ai_coach_turn_context_receipts.created_at IS 'Creation timestamp for immutable application evidence. There is intentionally no updated_at column or trigger in V1.1.';
+ALTER TABLE public.ai_coach_turn_context_receipts ADD CONSTRAINT ai_coach_turn_context_receipts_turn_fkey FOREIGN KEY (coach_turn_id) REFERENCES public.coach_turn(coach_turn_id) ON DELETE CASCADE;
 
 
 -- public.coach_message foreign keys
@@ -1345,11 +1389,6 @@ ALTER TABLE public.coach_tool_call ADD CONSTRAINT coach_tool_call_turn_fkey FORE
 ALTER TABLE public.coach_turn ADD CONSTRAINT coach_turn_assistant_message_fkey FOREIGN KEY (assistant_message_id) REFERENCES public.coach_message(coach_message_id) ON DELETE RESTRICT;
 ALTER TABLE public.coach_turn ADD CONSTRAINT coach_turn_session_fkey FOREIGN KEY (coach_session_id) REFERENCES public.coach_session(coach_session_id) ON DELETE CASCADE;
 ALTER TABLE public.coach_turn ADD CONSTRAINT coach_turn_user_message_fkey FOREIGN KEY (user_message_id) REFERENCES public.coach_message(coach_message_id) ON DELETE RESTRICT;
-
-
--- public.ai_coach_turn_context_receipts foreign keys
-
-ALTER TABLE public.ai_coach_turn_context_receipts ADD CONSTRAINT ai_coach_turn_context_receipts_turn_fkey FOREIGN KEY (coach_turn_id) REFERENCES public.coach_turn(coach_turn_id) ON DELETE CASCADE;
 
 
 -- public.weekly_zone_summary source

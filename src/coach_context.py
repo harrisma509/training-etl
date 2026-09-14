@@ -14,12 +14,16 @@ from db_writer import connect_db
 
 
 APP_TIMEZONE = ZoneInfo("America/Denver")
-DAILY_DAYS = 14
-WEEKLY_ROWS = 12
-MODELLED_DAYS = 90
-RECOVERY_DAYS = 28
-NARRATIVE_LIMIT = 2_000
-OTHER_ACTIVITY_LIMIT = 20
+DEFAULT_DAILY_DAYS = 28
+DAILY_DAYS_MIN = 7
+DAILY_DAYS_MAX = 365
+DEFAULT_WEEKLY_ROWS = 26
+WEEKLY_ROWS_MIN = 4
+WEEKLY_ROWS_MAX = 104
+MODELLED_DAYS = 90  # Calendar-day window returned for modeled Fitness, Fatigue, and Form history.
+RECOVERY_DAYS = 28  # Calendar-day window requested for sleep, HRV, resting heart rate, steps, weight, and falls.
+NARRATIVE_LIMIT = 2_000  # Maximum characters retained for each narrative or bounded JSON string.
+OTHER_ACTIVITY_LIMIT = 20  # Maximum secondary activities included within each Daily row.
 
 
 def _week_start(value: date) -> date:
@@ -119,7 +123,7 @@ def _latest_completed_audit(cur, current_week):
     return header
 
 
-def _audit_history(cur, current_week):
+def _audit_history(cur, current_week, weekly_rows):
     rows = _rows(cur, """
         SELECT week_start, overall_grade, green_count, yellow_count, red_count,
                audit_summary, next_week_action, computed_at
@@ -127,7 +131,7 @@ def _audit_history(cur, current_week):
         WHERE week_start <= %s
         ORDER BY week_start DESC
         LIMIT %s
-        """, (current_week, WEEKLY_ROWS))
+        """, (current_week, weekly_rows))
     if not rows:
         return []
 
@@ -151,7 +155,7 @@ def _audit_history(cur, current_week):
     return rows
 
 
-def _daily(cur, current_date):
+def _daily(cur, current_date, daily_days):
     rows = _rows(cur, """
         SELECT date, activity_count, activity_categories, ride_count, walk_count,
                hike_count, strength_count, mobility_count, ski_count, run_count,
@@ -167,7 +171,7 @@ def _daily(cur, current_date):
         FROM daily_training
         WHERE date BETWEEN %s AND %s
         ORDER BY date DESC
-        """, (current_date - timedelta(days=DAILY_DAYS - 1), current_date))
+        """, (current_date - timedelta(days=daily_days - 1), current_date))
     for row in rows:
         activities = row.get("other_activities")
         row["other_activities"] = _bounded_json(activities[:OTHER_ACTIVITY_LIMIT] if isinstance(activities, list) else activities)
@@ -246,7 +250,7 @@ def _recovery(cur, current_date):
     return [result[key] for key in sorted(result)]
 
 
-def _commentary(cur, current_week):
+def _commentary(cur, current_week, weekly_rows):
     rows = _rows(cur, """
         SELECT week_start, week_type, event, planned_focus, actual_focus,
                weekly_comment, risk_note, coach_note, task_note, lesson_learned,
@@ -257,7 +261,7 @@ def _commentary(cur, current_week):
         WHERE week_start <= %s AND week_start > %s AND hide_from_dashboard = false
         ORDER BY week_start DESC
         LIMIT %s
-        """, (current_week, current_week - timedelta(days=7 * WEEKLY_ROWS), WEEKLY_ROWS))
+        """, (current_week, current_week - timedelta(days=7 * weekly_rows), weekly_rows))
     text_fields = ("event", "planned_focus", "actual_focus", "weekly_comment", "risk_note",
                    "coach_note", "task_note", "lesson_learned", "status_override")
     for row in rows:
@@ -305,8 +309,12 @@ def _year_summary(cur, current_date):
     return row
 
 
-def build_coach_context(cfg):
-    """Return the fixed-range coaching snapshot using SELECT-only queries."""
+def build_coach_context(
+    cfg,
+    daily_days=DEFAULT_DAILY_DAYS,
+    weekly_rows=DEFAULT_WEEKLY_ROWS,
+):
+    """Return the bounded coaching snapshot using SELECT-only queries."""
     now = datetime.now(APP_TIMEZONE)
     current_date = now.date()
     current_week = _week_start(current_date)
@@ -314,7 +322,7 @@ def build_coach_context(cfg):
 
     with connect_db(cfg) as conn:
         with conn.cursor() as cur:
-            daily = _daily(cur, current_date)
+            daily = _daily(cur, current_date, daily_days)
             weekly = _rows(cur, """
                 SELECT week_start, week_end, total_load, main_ride_load, other_load,
                        activity_days, ride_count, walk_count, hike_count, strength_count,
@@ -326,7 +334,7 @@ def build_coach_context(cfg):
                 WHERE week_start <= %s
                 ORDER BY week_start DESC
                 LIMIT %s
-                """, (current_week, WEEKLY_ROWS))
+                """, (current_week, weekly_rows))
             zones = _rows(cur, """
                 SELECT week_start, week_end, ride_count, ride_time_sec, z1_sec, z2_sec,
                        z3_sec, z4_sec, z5_sec, z1_z2_sec, z4_z5_sec, z1_z2_pct,
@@ -335,13 +343,13 @@ def build_coach_context(cfg):
                 WHERE week_start <= %s
                 ORDER BY week_start DESC
                 LIMIT %s
-                """, (current_week, WEEKLY_ROWS))
+                """, (current_week, weekly_rows))
             current_audit = _audit(cur, current_week)
             latest_completed_audit = _latest_completed_audit(cur, current_week)
-            audit_history = _audit_history(cur, current_week)
+            audit_history = _audit_history(cur, current_week, weekly_rows)
             fff = _fitness_fatigue_form(cur, current_date)
             recovery = _recovery(cur, current_date)
-            commentary = _commentary(cur, current_week)
+            commentary = _commentary(cur, current_week, weekly_rows)
             next_commentary = _next_commentary(cur, current_week + timedelta(days=7))
             year_summary = _year_summary(cur, current_date)
             latest_activity = _row(cur, "SELECT max(date_local) AS latest_date FROM strava_activities")

@@ -32,10 +32,10 @@ comparisons use hmac.compare_digest.
 
 import hmac
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse
 
-from coach_context import build_coach_context
+from coach_context import DEFAULT_WEEKLY_ROWS, WEEKLY_ROWS_MAX, WEEKLY_ROWS_MIN, build_coach_context
 from resync_activity import resync_activity
 from settings import get_config, get_db_config
 
@@ -45,6 +45,20 @@ CFG = get_config()
 training_api_token = CFG.get("TRAINING_API_TOKEN")
 if not training_api_token or not str(training_api_token).strip():
     raise RuntimeError("Missing TRAINING_API_TOKEN configuration")
+
+
+def _validated_weekly_rows(request, weekly_rows):
+    if len(request.query_params.getlist("weekly_rows")) > 1:
+        raise ValueError("Invalid weekly_rows")
+    if weekly_rows is None:
+        return DEFAULT_WEEKLY_ROWS
+    if (
+        isinstance(weekly_rows, bool)
+        or not isinstance(weekly_rows, int)
+        or not WEEKLY_ROWS_MIN <= weekly_rows <= WEEKLY_ROWS_MAX
+    ):
+        raise ValueError("Invalid weekly_rows")
+    return weekly_rows
 
 
 @app.get("/health")
@@ -62,14 +76,24 @@ def health():
 
 
 @app.get("/internal/coach/context/current")
-def coach_context_endpoint(request: Request):
+def coach_context_endpoint(
+    request: Request,
+    daily_days: int = Query(28, ge=7, le=365),
+    weekly_rows: int | None = Query(None),
+):
     """Return a bounded, read-only snapshot of persisted coaching facts."""
     provided_token = request.headers.get("X-Internal-Token")
     if not provided_token or not hmac.compare_digest(provided_token, training_api_token):
         return JSONResponse(status_code=401, content={"status": "error", "error": "Unauthorized"})
+    if len(request.query_params.getlist("daily_days")) > 1:
+        return JSONResponse(status_code=400, content={"status": "error", "error": "Invalid daily_days"})
+    try:
+        weekly_rows = _validated_weekly_rows(request, weekly_rows)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"status": "error", "error": "Invalid weekly_rows"})
 
     try:
-        return build_coach_context(get_db_config())
+        return build_coach_context(get_db_config(), daily_days, weekly_rows)
     except Exception:
         return JSONResponse(status_code=500, content={"status": "error", "error": "Coach context unavailable"})
 

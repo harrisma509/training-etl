@@ -304,16 +304,46 @@ Returns the most recent fully completed Weekly Audit. This is the stable compari
 Returns bounded weekly Load history needed for recent trend interpretation.
 
 The endpoint should return persisted ETL results rather than recalculate Load in API code.
+The `weekly_rows` query parameter controls this bound. Rows are ordered by
+`week_start DESC`, and fewer available rows are returned without synthesis.
 
 #### `weekly_tid_history`
 
 Returns bounded weekly TID history.
 
 The API must preserve the ETL definition and should not silently change units, rounding, or derivation.
+The same `weekly_rows` bound applies, with deterministic newest-first ordering.
+
+#### `audit_history` and weekly commentary
+
+`audit_history` and the recent weekly commentary in `athlete_narrative` use the
+same configured weekly bound. Commentary uses the corresponding calendar
+lookback of `7 * weekly_rows` days. Current and latest-completed audit snapshots
+remain separate single-week anchors and are not expanded by this setting.
 
 #### `recent_days`
 
-Returns bounded recent detailed training days or activities. Depending on the authoritative schema, this may include:
+Returns sparse `daily_training` rows in an inclusive calendar-day window ending on the Training API's current `America/Denver` date. The internal endpoint accepts the bounded server-to-server query parameter:
+
+```text
+GET /internal/coach/context/current?daily_days=28
+```
+
+`daily_days` defaults to `28` when omitted for trusted legacy callers and must be an integer from `7` through `365` when supplied. Invalid values are rejected before database access. Existing rows are returned only; rest days are not synthesized. Rows are ordered newest first. Depending on the authoritative schema, each row may include:
+
+The endpoint also accepts:
+
+```text
+GET /internal/coach/context/current?daily_days=28&weekly_rows=26
+```
+
+`weekly_rows` defaults to `26` when omitted for trusted legacy callers and must
+be an integer from `4` through `104` when supplied. Blank, malformed, float-like,
+duplicate, boolean, and out-of-range values are rejected before database access.
+The value bounds `weekly_load_history`, `weekly_tid_history`, `audit_history`,
+and recent weekly commentary consistently; coverage reports actual returned
+weekly rows rather than the configured maximum. Authentication remains required
+through `X-Internal-Token`.
 
 - Activity date
 - Activity type
@@ -325,7 +355,7 @@ Returns bounded recent detailed training days or activities. Depending on the au
 - Strength or prehab activity
 - Relevant commentary
 
-The endpoint should avoid returning unbounded raw activity history.
+The endpoint should avoid returning unbounded raw activity history. The parameter is server-to-server only and still requires `X-Internal-Token`.
 
 #### `fitness_fatigue_form`
 
@@ -831,7 +861,9 @@ These measurements can help reduce redundant model context without removing safe
 The current `training-web` guard rejects model-facing authoritative context above:
 
 ```text
-120,000 serialized characters
+240,000 serialized characters
+ 240,000 supports 100 days of day details.  this is mostly for cost control so some coding or issue doesn't send way too much data to the costly AI API
+
 ```
 
 The Training API should normally remain well below that ceiling. The ceiling is a consumer safety guard, not a target response size.
