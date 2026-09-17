@@ -2,7 +2,7 @@ import unittest
 from datetime import date
 from unittest.mock import Mock
 
-from coach_context import _audit_history, _commentary, _daily
+from coach_context import _audit_history, _commentary, _daily, _daily_checkins
 
 
 class CoachContextDailyTests(unittest.TestCase):
@@ -65,6 +65,59 @@ class CoachContextWeeklyBoundsTests(unittest.TestCase):
             cursor.execute.call_args.args[1],
             (date(2026, 9, 7), date(2024, 9, 9), 104),
         )
+
+
+class CoachContextDailyCheckinTests(unittest.TestCase):
+    def test_checkins_use_shared_inclusive_window_and_map_flags_without_timestamps(self):
+        cursor = Mock()
+        cursor.fetchall.return_value = [
+            {
+                "checkin_date": date(2026, 9, 13),
+                "overall_status": "mixed",
+                "note": "Felt okay",
+                "readiness": None,
+                "energy": 3,
+                "soreness": 1,
+                "pain": None,
+                "physical_labor": None,
+                "handling_quality": "normal",
+                "is_travel": True,
+                "is_sick": False,
+                "is_injury": True,
+                "is_bike_park": False,
+                "is_recovery": True,
+                "is_goal_event": False,
+                "is_bad_weather": True,
+                "is_high_life_stress": False,
+                "is_lost": True,
+                "is_gear": False,
+                "is_crash": True,
+                "is_group_ride": False,
+                "is_sore": True,
+                "is_tired": False,
+                "is_poor_sleep": True,
+                "created_at": "private",
+                "updated_at": "private",
+            },
+        ]
+
+        rows = _daily_checkins(cursor, date(2026, 9, 13), 28)
+
+        self.assertEqual(cursor.execute.call_args.args[1], (date(2026, 8, 17), date(2026, 9, 13)))
+        self.assertEqual(rows[0]["date"], date(2026, 9, 13))
+        self.assertEqual(rows[0]["flags"], [
+            "travel", "injury", "recovery", "bad_weather", "lost", "crash", "sore", "poor_sleep",
+        ])
+        self.assertIsNone(rows[0]["readiness"])
+        self.assertNotIn("created_at", rows[0])
+        self.assertNotIn("updated_at", rows[0])
+
+    def test_empty_checkins_have_no_synthesized_rows(self):
+        cursor = Mock()
+        cursor.fetchall.return_value = []
+
+        self.assertEqual(_daily_checkins(cursor, date(2026, 9, 13), 7), [])
+        self.assertEqual(cursor.execute.call_args.args[1], (date(2026, 9, 7), date(2026, 9, 13)))
 
 
 if __name__ == "__main__":

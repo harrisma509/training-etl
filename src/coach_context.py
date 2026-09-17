@@ -24,6 +24,23 @@ MODELLED_DAYS = 90  # Calendar-day window returned for modeled Fitness, Fatigue,
 RECOVERY_DAYS = 28  # Calendar-day window requested for sleep, HRV, resting heart rate, steps, weight, and falls.
 NARRATIVE_LIMIT = 2_000  # Maximum characters retained for each narrative or bounded JSON string.
 OTHER_ACTIVITY_LIMIT = 20  # Maximum secondary activities included within each Daily row.
+DAILY_CHECKIN_FLAG_FIELDS = (
+    ("is_travel", "travel"),
+    ("is_sick", "sick"),
+    ("is_injury", "injury"),
+    ("is_bike_park", "bike_park"),
+    ("is_recovery", "recovery"),
+    ("is_goal_event", "goal_event"),
+    ("is_bad_weather", "bad_weather"),
+    ("is_high_life_stress", "high_life_stress"),
+    ("is_lost", "lost"),
+    ("is_gear", "gear"),
+    ("is_crash", "crash"),
+    ("is_group_ride", "group_ride"),
+    ("is_sore", "sore"),
+    ("is_tired", "tired"),
+    ("is_poor_sleep", "poor_sleep"),
+)
 
 
 def _week_start(value: date) -> date:
@@ -180,6 +197,34 @@ def _daily(cur, current_date, daily_days):
     return rows
 
 
+def _daily_checkins(cur, current_date, daily_days):
+    rows = _rows(cur, """
+        SELECT checkin_date, overall_status, note, readiness, energy, soreness,
+               pain, physical_labor, handling_quality, is_travel, is_sick,
+               is_injury, is_bike_park, is_recovery, is_goal_event,
+               is_bad_weather, is_high_life_stress, is_lost, is_gear, is_crash,
+               is_group_ride, is_sore, is_tired, is_poor_sleep
+        FROM public.daily_checkin
+        WHERE checkin_date BETWEEN %s AND %s
+        ORDER BY checkin_date DESC
+        """, (current_date - timedelta(days=daily_days - 1), current_date))
+    return [
+        {
+            "date": row["checkin_date"],
+            "overall_status": row.get("overall_status"),
+            "note": row.get("note"),
+            "readiness": row.get("readiness"),
+            "energy": row.get("energy"),
+            "soreness": row.get("soreness"),
+            "pain": row.get("pain"),
+            "physical_labor": row.get("physical_labor"),
+            "handling_quality": row.get("handling_quality"),
+            "flags": [name for column, name in DAILY_CHECKIN_FLAG_FIELDS if row.get(column) is True],
+        }
+        for row in rows
+    ]
+
+
 def _fitness_fatigue_form(cur, current_date):
     history = _rows(cur, """
         SELECT date, daily_load, fitness, fatigue, form, model_version, updated_at
@@ -323,6 +368,7 @@ def build_coach_context(
     with connect_db(cfg) as conn:
         with conn.cursor() as cur:
             daily = _daily(cur, current_date, daily_days)
+            daily_checkins = _daily_checkins(cur, current_date, daily_days)
             weekly = _rows(cur, """
                 SELECT week_start, week_end, total_load, main_ride_load, other_load,
                        activity_days, ride_count, walk_count, hike_count, strength_count,
@@ -404,6 +450,10 @@ def build_coach_context(
                           "data_through_date": data_through},
         "freshness": freshness,
         "coverage": {"detailed_daily_days_returned": len(daily), "weekly_rows_returned": len(weekly),
+                 "daily_checkins_included": bool(daily_checkins),
+                 "daily_checkin_count": len(daily_checkins),
+                 "oldest_daily_checkin_date": daily_checkins[-1]["date"] if daily_checkins else None,
+                 "newest_daily_checkin_date": daily_checkins[0]["date"] if daily_checkins else None,
                      "fitness_fatigue_form_days_returned": len(fff["history"]), "recovery_days_requested": RECOVERY_DAYS,
                      "sleep_days_measured": sum(1 for row in recovery if row.get("sleep_score") is not None),
                      "sleep_duration_days_measured": sum(1 for row in recovery if row.get("total_sleep_hr") is not None),
@@ -422,6 +472,7 @@ def build_coach_context(
         "weekly_load_history": weekly,
         "weekly_tid_history": zones,
         "recent_days": daily,
+        "daily_checkins": daily_checkins,
         "fitness_fatigue_form": fff,
         "recovery_history": recovery,
         "athlete_narrative": {"current_week": current_commentary, "recent_weeks": commentary},
