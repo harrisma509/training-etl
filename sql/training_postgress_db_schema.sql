@@ -847,6 +847,52 @@ CREATE INDEX idx_weekly_commentary_flags ON public.weekly_commentary USING btree
 CREATE INDEX idx_weekly_commentary_week_type ON public.weekly_commentary USING btree (week_type);
 
 
+-- public.daily_checkin definition
+
+CREATE TABLE public.daily_checkin (
+	checkin_date date NOT NULL,
+	overall_status text NOT NULL,
+	note text NOT NULL,
+	readiness int2 NULL,
+	energy int2 NULL,
+	soreness int2 NULL,
+	pain int2 NULL,
+	physical_labor text NULL,
+	handling_quality text NULL,
+	is_travel bool DEFAULT false NOT NULL,
+	is_sick bool DEFAULT false NOT NULL,
+	is_injury bool DEFAULT false NOT NULL,
+	is_bike_park bool DEFAULT false NOT NULL,
+	is_recovery bool DEFAULT false NOT NULL,
+	is_goal_event bool DEFAULT false NOT NULL,
+	is_bad_weather bool DEFAULT false NOT NULL,
+	is_high_life_stress bool DEFAULT false NOT NULL,
+	is_lost bool DEFAULT false NOT NULL,
+	is_gear bool DEFAULT false NOT NULL,
+	is_crash bool DEFAULT false NOT NULL,
+	is_group_ride bool DEFAULT false NOT NULL,
+	is_sore bool DEFAULT false NOT NULL,
+	is_tired bool DEFAULT false NOT NULL,
+	is_poor_sleep bool DEFAULT false NOT NULL,
+	created_at timestamptz DEFAULT now() NOT NULL,
+	updated_at timestamptz DEFAULT now() NOT NULL,
+	CONSTRAINT daily_checkin_checkin_date_not_null NOT NULL checkin_date,
+	CONSTRAINT daily_checkin_overall_status_not_null NOT NULL overall_status,
+	CONSTRAINT daily_checkin_note_not_null NOT NULL note,
+	CONSTRAINT daily_checkin_overall_status_check CHECK (overall_status IN ('good', 'mixed', 'poor')),
+	CONSTRAINT daily_checkin_note_not_blank_check CHECK (btrim(note) <> ''),
+	CONSTRAINT daily_checkin_note_length_check CHECK (char_length(note) <= 1000),
+	CONSTRAINT daily_checkin_readiness_range_check CHECK (readiness IS NULL OR readiness BETWEEN 1 AND 5),
+	CONSTRAINT daily_checkin_energy_range_check CHECK (energy IS NULL OR energy BETWEEN 1 AND 5),
+	CONSTRAINT daily_checkin_soreness_range_check CHECK (soreness IS NULL OR soreness BETWEEN 0 AND 4),
+	CONSTRAINT daily_checkin_pain_range_check CHECK (pain IS NULL OR pain BETWEEN 0 AND 4),
+	CONSTRAINT daily_checkin_physical_labor_check CHECK (physical_labor IS NULL OR physical_labor IN ('none', 'light', 'moderate', 'heavy')),
+	CONSTRAINT daily_checkin_handling_quality_check CHECK (handling_quality IS NULL OR handling_quality IN ('sharp', 'normal', 'off')),
+	CONSTRAINT daily_checkin_updated_at_after_created_at_check CHECK (updated_at >= created_at),
+	CONSTRAINT daily_checkin_pkey PRIMARY KEY (checkin_date)
+);
+
+
 -- public.weekly_training definition
 
 -- Drop table
