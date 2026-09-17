@@ -27,17 +27,39 @@ def main():
     activities = fetch_activities(access_token, cfg["DAYS_BACK"])
     rows = [normalize_activity(activity) for activity in activities]
 
-    gear_display_map = fetch_gear_display_map(cfg) if cfg.get("WRITE_DB") else {}
+    gear_display_map = fetch_gear_display_map(cfg) if not cfg.get("WRITE_DB") else {}
     logger.info("Gear records loaded from DB: %s", len(gear_display_map))
 
-    daily, warnings = build_daily_training(
-        rows=rows,
+    if cfg.get("WRITE_DB"):
+        daily = []
+        weekly = []
+        warnings = []
+    else:
+        daily, warnings = build_daily_training(
+            rows=rows,
+            access_token=access_token,
+            chronic_c=cfg["LOAD_CHRONIC_C"],
+            gear_display_map=gear_display_map,
+        )
+        weekly = build_weekly_training(daily)
+
+    run_at_utc = datetime.now(timezone.utc).isoformat()
+
+    write_result = write_training_to_db(
+        cfg=cfg,
+        activities=rows,
+        daily_rows=daily,
+        weekly_rows=weekly,
+        warnings=warnings,
+        run_at_utc=run_at_utc,
         access_token=access_token,
         chronic_c=cfg["LOAD_CHRONIC_C"],
-        gear_display_map=gear_display_map,
     )
 
-    weekly = build_weekly_training(daily)
+    if write_result is not None:
+        daily = write_result["daily_rows"]
+        weekly = write_result["weekly_rows"]
+        warnings = write_result["warnings"]
 
     logger.info("Activities pulled: %s", len(rows))
     logger.info("Daily rows built: %s", len(daily))
@@ -75,16 +97,6 @@ def main():
         for warning in warnings:
             logger.warning("%s", warning)
 
-    run_at_utc = datetime.now(timezone.utc).isoformat()
-
-    write_training_to_db(
-        cfg=cfg,
-        activities=rows,
-        daily_rows=daily,
-        weekly_rows=weekly,
-        warnings=warnings,
-        run_at_utc=run_at_utc,
-    )
     if cfg.get("WRITE_DB"):
         logger.info("Postgres write complete")
 

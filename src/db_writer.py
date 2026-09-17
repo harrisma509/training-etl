@@ -1,10 +1,13 @@
 import json
 import logging
-from datetime import datetime
+from collections.abc import Mapping
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import psycopg
 from psycopg.rows import dict_row
+from activity_utils import classify_activity
+from daily_builder import build_daily_training
 from fitness_fatigue_builder import build_fitness_fatigue, validate_fitness_fatigue_rows
 from settings import get_fitness_fatigue_config
 from weekly_builder import build_weekly_training
@@ -23,7 +26,16 @@ def connect_db(cfg):
     )
 
 
-def write_training_to_db(cfg, activities, daily_rows, weekly_rows, warnings, run_at_utc):
+def write_training_to_db(
+    cfg,
+    activities,
+    daily_rows,
+    weekly_rows,
+    warnings,
+    run_at_utc,
+    access_token=None,
+    chronic_c=None,
+):
     if not cfg.get("WRITE_DB"):
         return
 
@@ -33,14 +45,23 @@ def write_training_to_db(cfg, activities, daily_rows, weekly_rows, warnings, run
         dbname=cfg["DB_NAME"],
         user=cfg["DB_USER"],
         password=cfg["DB_PASSWORD"],
+        row_factory=dict_row,
     ) as conn:
         with conn.cursor() as cur:
 
             logger.info("DB write: activities")
+            old_dates = fetch_activity_dates(cur, activities)
             upsert_strava_activities(cur, activities)
 
             logger.info("DB write: daily")
-            upsert_daily_training(cur, daily_rows)
+            affected_dates = affected_activity_dates(old_dates, activities)
+            rebuilt_daily, rebuild_warnings, _ = rebuild_daily_for_dates(
+                cur=cur,
+                dates=affected_dates,
+                access_token=access_token,
+                chronic_c=chronic_c if chronic_c is not None else cfg["LOAD_CHRONIC_C"],
+            )
+            warnings = list(warnings or []) + rebuild_warnings
             rebuild_fitness_fatigue(cur)
             logger.info("DB rebuild: weekly from full daily_training")
             all_daily_rows = fetch_all_daily_training_for_weekly(cur)
@@ -54,13 +75,137 @@ def write_training_to_db(cfg, activities, daily_rows, weekly_rows, warnings, run
                 run_at_utc=run_at_utc,
                 days_back=cfg["DAYS_BACK"],
                 activity_count=len(activities),
-                daily_rows=len(daily_rows),
+                daily_rows=len(rebuilt_daily),
                 weekly_rows=len(weekly_rows),
                 warning_count=len(warnings),
                 status="ok" if not warnings else "warnings",
             )
 
         conn.commit()
+
+    return {
+        "daily_rows": rebuilt_daily,
+        "weekly_rows": weekly_rows,
+        "warnings": warnings,
+    }
+
+
+def date_text(value):
+    if value is None:
+        return None
+    return value.isoformat()[:10] if hasattr(value, "isoformat") else str(value)[:10]
+
+
+def date_value(value):
+    return value if isinstance(value, date) else date.fromisoformat(date_text(value))
+
+
+def fetch_activity_dates(cur, activities):
+    activity_ids = [
+        str(activity.get("id"))
+        for activity in activities
+        if activity.get("id") is not None
+    ]
+    if not activity_ids:
+        return set()
+
+    cur.execute(
+        """
+        SELECT date_local
+        FROM strava_activities
+        WHERE activity_id = ANY(%s)
+        """,
+        (activity_ids,),
+    )
+    return {date_text(row["date_local"]) for row in cur.fetchall() if row.get("date_local") is not None}
+
+
+def affected_activity_dates(old_dates, activities):
+    new_dates = {
+        date_text(activity.get("date_local"))
+        for activity in activities
+        if date_text(activity.get("date_local"))
+    }
+    return set(old_dates) | new_dates
+
+
+def db_activity_to_row(row):
+    activity = {
+        "id": str(row.get("activity_id") or ""),
+        "date_local": date_text(row.get("date_local")),
+        "name": row.get("name") or "",
+        "sport_type": row.get("sport_type") or "",
+        "type": row.get("sport_type") or "",
+        "moving_sec": int(row.get("moving_sec") or 0),
+        "elapsed_sec": int(row.get("elapsed_sec") or 0),
+        "distance_mi": float(row.get("distance_mi") or 0.0),
+        "elevation_ft": float(row.get("elevation_ft") or 0.0),
+        "has_heartrate": bool(row.get("has_heartrate") or False),
+        "gear_id": row.get("gear_id") or "",
+        "bike_name": row.get("bike_name") or "",
+        "average_hr": row.get("average_hr"),
+        "max_hr": row.get("max_hr"),
+    }
+    activity["activity_category"] = row.get("activity_category") or classify_activity(activity)
+    return activity
+
+
+def fetch_activity_rows_for_dates(cur, dates):
+    if not dates:
+        return []
+
+    cur.execute(
+        """
+        SELECT
+            activity_id,
+            date_local,
+            name,
+            sport_type,
+            activity_category,
+            moving_sec,
+            elapsed_sec,
+            distance_mi,
+            elevation_ft,
+            has_heartrate,
+            average_hr,
+            max_hr,
+            gear_id,
+            bike_name
+        FROM strava_activities
+        WHERE date_local = ANY(%s)
+        ORDER BY date_local, activity_id
+        """,
+        ([date_value(value) for value in sorted(dates)],),
+    )
+    return [db_activity_to_row(row) for row in cur.fetchall()]
+
+
+def rebuild_daily_for_dates(cur, dates, access_token, chronic_c):
+    if not dates:
+        return [], [], []
+    if access_token is None:
+        raise ValueError("access_token is required for an authoritative Daily rebuild")
+
+    persisted_rows = fetch_activity_rows_for_dates(cur, dates)
+    gear_display_map = {}
+    for row in persisted_rows:
+        if row.get("gear_id"):
+            gear_display_map[row["gear_id"]] = row.get("bike_name") or row["gear_id"]
+
+    daily_rows, warnings = build_daily_training(
+        rows=persisted_rows,
+        access_token=access_token,
+        chronic_c=chronic_c,
+        gear_display_map=gear_display_map,
+    )
+    rebuilt_dates = {date_text(row.get("date")) for row in daily_rows}
+    deleted_dates = []
+    for date_value in sorted(dates):
+        if date_value not in rebuilt_dates:
+            cur.execute("DELETE FROM daily_training WHERE date = %s", (date_value,))
+            deleted_dates.append(date_value)
+    upsert_daily_training(cur, daily_rows)
+    return daily_rows, warnings, deleted_dates
 
 
 def fetch_daily_load_rows(cur, start_date, through_date):
@@ -79,7 +224,7 @@ def fetch_daily_load_rows(cur, start_date, through_date):
     columns = [column.name for column in cur.description]
     rows = cur.fetchall()
     return [
-        dict(row) if isinstance(row, dict) else dict(zip(columns, row))
+        dict(row) if isinstance(row, Mapping) else dict(zip(columns, row))
         for row in rows
     ]
 
@@ -181,7 +326,7 @@ def fetch_all_daily_training_for_weekly(cur):
     """)
 
     columns = [column.name for column in cur.description]
-    return [dict(zip(columns, row)) for row in cur.fetchall()]
+    return [dict(row) if isinstance(row, Mapping) else dict(zip(columns, row)) for row in cur.fetchall()]
 
 
 def replace_weekly_training(cur, weekly_rows):
@@ -286,7 +431,14 @@ def fetch_gear_display_names(cur, activities):
     rows = cur.fetchall()
     display_names = {}
 
-    for gear_id, brand, model_year, gear_name in rows:
+    for row in rows:
+        if isinstance(row, Mapping):
+            gear_id = row["gear_id"]
+            brand = row["brand"]
+            model_year = row["model_year"]
+            gear_name = row["gear_name"]
+        else:
+            gear_id, brand, model_year, gear_name = row
         parts = []
 
         if model_year:

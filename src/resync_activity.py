@@ -7,9 +7,10 @@ from datetime import datetime, timedelta
 import psycopg
 from psycopg.rows import dict_row
 
-from activity_utils import classify_activity, normalize_activity
+from activity_utils import normalize_activity
 from daily_builder import build_daily_training
 from db_writer import (
+    db_activity_to_row,
     rebuild_fitness_fatigue,
     replace_weekly_training,
     upsert_daily_training,
@@ -61,47 +62,6 @@ def compute_rebuild_plan(old_date, new_date):
             seen_weeks.add(week_start)
 
     return {"dates": date_values, "week_starts": week_starts}
-
-
-def _db_activity_to_row(row):
-    activity = {
-        "id": str(row.get("activity_id") or ""),
-        "date_local": safe_iso(row.get("date_local")),
-        "name": row.get("name") or "",
-        "sport_type": row.get("sport_type") or "",
-        "type": row.get("sport_type") or "",
-        "moving_sec": int(row.get("moving_sec") or 0),
-        "elapsed_sec": int(row.get("elapsed_sec") or 0),
-        "distance_mi": float(row.get("distance_mi") or 0.0),
-        "elevation_ft": float(row.get("elevation_ft") or 0.0),
-        "has_heartrate": bool(row.get("has_heartrate") or False),
-        "gear_id": row.get("gear_id") or "",
-        "average_hr": row.get("average_hr"),
-        "max_hr": row.get("max_hr"),
-    }
-
-    activity["activity_category"] = classify_activity(activity)
-
-    if row.get("raw_json") is not None:
-        raw_json = row.get("raw_json") or {}
-        for key, default_value in {
-            "name": activity.get("name"),
-            "sport_type": activity.get("sport_type"),
-            "type": activity.get("type"),
-            "moving_sec": activity.get("moving_sec"),
-            "elapsed_sec": activity.get("elapsed_sec"),
-            "distance_mi": activity.get("distance_mi"),
-            "elevation_ft": activity.get("elevation_ft"),
-            "has_heartrate": activity.get("has_heartrate"),
-            "gear_id": activity.get("gear_id"),
-            "average_hr": activity.get("average_hr"),
-            "max_hr": activity.get("max_hr"),
-        }.items():
-            if key in raw_json and default_value in (None, "", 0, 0.0, False):
-                activity[key] = raw_json.get(key)
-
-    activity["date_local"] = safe_iso(activity.get("date_local"))
-    return activity
 
 
 def fetch_activity_detail_row(access_token, activity_id):
@@ -184,7 +144,7 @@ def fetch_date_rows(cfg, date_text):
                 """,
                 (date_text,),
             )
-            return [_db_activity_to_row(row) for row in cur.fetchall()]
+            return [db_activity_to_row(row) for row in cur.fetchall()]
 
 
 def compare_activity_change(old_row, new_row, gear_display_map):
@@ -376,7 +336,7 @@ def fetch_date_activity_rows(cur, date_text):
         """,
         (date_text,),
     )
-    return [_db_activity_to_row(row) for row in cur.fetchall()]
+    return [db_activity_to_row(row) for row in cur.fetchall()]
 
 
 def fetch_all_daily_rows(cur):
