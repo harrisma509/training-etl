@@ -1250,6 +1250,7 @@ CREATE TABLE public.coach_session (
 	provider text NULL,
 	default_model text NULL,
 	coaching_policy_version text NOT NULL,
+	current_mode text DEFAULT 'training'::text NOT NULL,
 	summary text NULL, -- Compact context summary for future model requests; does not replace or delete original messages.
 	summary_through_message_id int8 NULL, -- Highest message identifier represented by summary after compaction.
 	compacted_at timestamptz NULL,
@@ -1261,6 +1262,8 @@ CREATE TABLE public.coach_session (
 	CONSTRAINT coach_session_activity_time_check CHECK ((last_activity_at >= created_at)),
 	CONSTRAINT coach_session_coach_session_id_not_null NOT NULL coach_session_id,
 	CONSTRAINT coach_session_coaching_policy_version_not_null NOT NULL coaching_policy_version,
+	CONSTRAINT coach_session_current_mode_check CHECK ((current_mode = ANY (ARRAY['training'::text, 'conversational'::text]))),
+	CONSTRAINT coach_session_current_mode_not_null NOT NULL current_mode,
 	CONSTRAINT coach_session_compaction_count_check CHECK ((compaction_count >= 0)),
 	CONSTRAINT coach_session_compaction_count_not_null NOT NULL compaction_count,
 	CONSTRAINT coach_session_compaction_state_check CHECK ((((compaction_count = 0) AND (compacted_at IS NULL) AND (summary_through_message_id IS NULL)) OR ((compaction_count > 0) AND (compacted_at IS NOT NULL) AND (summary_through_message_id IS NOT NULL) AND (summary IS NOT NULL) AND (btrim(summary) <> ''::text)))),
@@ -1350,6 +1353,7 @@ CREATE TABLE public.coach_turn (
 	provider text NULL,
 	model text NULL,
 	coaching_policy_version text NOT NULL,
+	coach_mode text DEFAULT 'training'::text NOT NULL,
 	status text DEFAULT 'started'::text NOT NULL,
 	started_at timestamptz DEFAULT now() NOT NULL,
 	completed_at timestamptz NULL,
@@ -1371,6 +1375,8 @@ CREATE TABLE public.coach_turn (
 	CONSTRAINT coach_turn_coach_session_id_not_null NOT NULL coach_session_id,
 	CONSTRAINT coach_turn_coach_turn_id_not_null NOT NULL coach_turn_id,
 	CONSTRAINT coach_turn_coaching_policy_version_not_null NOT NULL coaching_policy_version,
+	CONSTRAINT coach_turn_coach_mode_check CHECK ((coach_mode = ANY (ARRAY['training'::text, 'conversational'::text]))),
+	CONSTRAINT coach_turn_coach_mode_not_null NOT NULL coach_mode,
 	CONSTRAINT coach_turn_context_bounds_check CHECK (((effective_context_tokens IS NULL) OR (model_context_window_tokens IS NULL) OR (effective_context_tokens <= model_context_window_tokens))),
 	CONSTRAINT coach_turn_context_window_check CHECK (((model_context_window_tokens IS NULL) OR (model_context_window_tokens > 0))),
 	CONSTRAINT coach_turn_cost_check CHECK (((estimated_cost_usd IS NULL) OR (estimated_cost_usd >= (0)::numeric))),
