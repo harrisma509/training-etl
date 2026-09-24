@@ -81,9 +81,27 @@ python /app/strava_narrative_pilot.py --activity-id 20302298948 --activity-id 19
 
 Apply refreshes the token once, makes at most three detail calls, and emits one sanitized JSON object per activity followed by a sanitized JSON summary object. Output contains only IDs, request/persistence outcomes, allowlisted failure classes, field states, observation flags, counts, and timestamps. It does not print narrative text, response bodies, names, athlete data, route data, or credentials. SQL is not included in the current ETL deployment package; apply it separately after review. A full-history backfill is not part of Slice 1.
 
+### Slice 2 historical backfill
+
+`src/strava_narrative_backfill.py` is the restartable historical backfill entry point. It uses `narrative_observed_at` as its durable activity-level checkpoint: by default, an activity is eligible only when that timestamp is null. A successful, well-formed detailed response checkpoints the activity even when optional narrative keys are omitted; omitted keys preserve their text and field-observed booleans. The field booleans retain provider-key presence semantics and are reported separately from completed backfill inspections. The default scope is `2012-01-01` through the current date, ordered newest first by `date_local DESC, activity_id DESC` so recent narrative becomes available first. Date filters and repeatable targeted activity IDs are supported. `--refresh-observed` deliberately removes the checkpoint predicate and therefore spends quota on already inspected rows.
+
+The CLI defaults to batches of 100, allows at most 150, and preserves 400 daily read requests as headroom, with a configurable minimum of 200. It prefers Strava's read-specific `X-ReadRateLimit-Limit` and `X-ReadRateLimit-Usage` headers, falling back to overall headers only when read headers are unavailable. Without headers it uses conservative local request accounting and pacing. It stops before the daily headroom boundary, before the short-window boundary, at `--max-requests`, and immediately on HTTP 429. The short-lived access token is refreshed once after a 401. Only network failures and 5xx responses retry, with bounded exponential backoff; retry exhaustion re-raises the original typed failure so safe status classification is preserved. 403, 404, malformed payloads, and schema/database failures preserve local data and do not receive broad retries. A database failure stops further provider calls.
+
+Apply acquires a non-blocking PostgreSQL session advisory lock specific to this backfill. A second apply exits before token refresh or any Strava call. Selection transactions close before provider calls, and each narrative write uses the existing allowlisted writer in an independent transaction. No Daily, Weekly, Load, Fitness/Fatigue/Form, TID, audit, yearly, or other aggregate rebuild runs. JSON Lines output contains activity IDs, outcomes, allowlisted failure classes, field states, retry counts, safe numeric rate metadata, and summaries only; it never contains narrative text, names, raw responses, routes, credentials, or SQL. Summary success requires a completed request and an accepted persistence outcome (`updated`, `checkpointed`, or `no_observed_fields`). A quota boundary record is excluded from success and failure counts; a 429 is counted as an attempted stopped request, while a stop before the next request is neither attempted nor failed. Permanent 403/404 failures remain eligible on a later default run because this slice adds no terminal-failure table.
+
+Preview is read-only and makes no Strava calls or writes:
+
+```text
+python /app/strava_narrative_backfill.py --preview
+python /app/strava_narrative_backfill.py --apply --batch-size 100
+python /app/strava_narrative_backfill.py --apply --activity-id 20302298948 --activity-id 19880001202
+```
+
+Operators should avoid deploying or restarting the ETL container during an active backfill or normal sync. A quota stop leaves completed activities committed; rerun the same default command on the next UTC quota day. Inspect the final sanitized summary and database coverage queries before increasing the batch or using `--refresh-observed`.
+
 ## Current API and consumer surfaces
 
-The ETL-side Training API and internal API provide bounded, authenticated training data and approved ETL operations. The web application uses those boundaries and selected database-backed routes for dashboard presentation. Current activity search is limited and does not search narrative. No dedicated local activity-detail narrative route or explicit narrative export contract was verified.
+The ETL-side Training API and internal API provide bounded, authenticated training data and approved ETL operations. The web application uses those boundaries and selected database-backed routes for dashboard presentation. Current activity search is limited and does not search narrative. The web repository now owns a narrow read-only `/api/activities/{activity_id}/narrative` route for on-demand Daily display; there is still no narrative export or search contract.
 
 Current Coach context assembly is bounded and source-labeled. Context receipts store allowlisted metadata and coverage, not prompts, raw provider payloads, or narrative bodies. Narrative is not currently part of Coach context.
 
@@ -91,7 +109,7 @@ Operational logs record activity counts, names, dates, and calculated metrics in
 
 ## Description and private-note investigation status
 
-The currently verified official Strava API reference associates `description` with detailed activity retrieval. Summary activity retrieval does not currently provide the desired narrative contract, so normal list-only sync cannot populate descriptions.
+The currently verified official Strava API reference associates `description` with detailed activity retrieval. Summary activity retrieval does not currently provide the desired narrative contract, so normal list-only sync cannot populate descriptions. Official documentation was checked on 2026-09-23: the activity reference documents `GET /activities/{id}` and `DetailedActivity.description`; authentication documents refresh-token exchange and six-hour access-token expiry; rate-limit documentation documents overall and read-specific `X-RateLimit-*` and `X-ReadRateLimit-*` headers, daily reset at midnight UTC, and HTTP 429 behavior; the changelog records the current 2026 API changes and the planned 2027 base URL change. The backfill uses the current headers and existing API base URL without changing normal sync.
 
 The public API contract reviewed on 2026-09-23 did not establish an exact private-note field, endpoint, OAuth scope, availability rule, edit behavior, or clearing semantics. Private-note support must not be claimed without direct official documentation or a separately authorized, sanitized API probe.
 

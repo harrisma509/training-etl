@@ -10,7 +10,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from strava_client import fetch_activities
+from strava_client import fetch_activities, fetch_activity_detail_with_metadata
 
 
 class StravaFetchBoundaryTests(unittest.TestCase):
@@ -35,6 +35,32 @@ class StravaFetchBoundaryTests(unittest.TestCase):
             datetime.fromtimestamp(int(query["after"][0]), timezone.utc),
             datetime(2024, 4, 1, 6, 30, tzinfo=timezone.utc),
         )
+
+    def test_detail_metadata_keeps_only_numeric_rate_headers(self):
+        class Response:
+            headers = {
+                "X-ReadRateLimit-Limit": "200, 2000",
+                "X-ReadRateLimit-Usage": "4, 450",
+                "Authorization": "Bearer secret",
+                "X-Unrelated": "private",
+            }
+
+            def read(self):
+                return b'{"description": null}'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+        with patch("strava_client.urlopen", return_value=Response()):
+            detail, limits = fetch_activity_detail_with_metadata("token", "123")
+
+        self.assertEqual(detail, {"description": None})
+        self.assertEqual(limits["read"]["limit"], [200, 2000])
+        self.assertNotIn("Authorization", str(limits))
+        self.assertNotIn("private", str(limits))
 
 
 if __name__ == "__main__":

@@ -10,7 +10,12 @@ from datetime import datetime, timezone
 
 from activity_utils import NARRATIVE_FIELDS, extract_activity_narrative
 from settings import get_config
-from strava_client import StravaRequestError, fetch_activity_detail, refresh_access_token
+from strava_client import (
+    StravaNetworkError,
+    StravaRequestError,
+    fetch_activity_detail,
+    refresh_access_token,
+)
 
 
 MAX_ACTIVITY_IDS = 3
@@ -85,6 +90,8 @@ def classify_failure(error):
             return "auth_failed"
         if error.status_code == 404:
             return "activity_not_found"
+        return "fetch_failed"
+    if isinstance(error, StravaNetworkError):
         return "fetch_failed"
     if error.__class__.__name__ == "ActivityNarrativeActivityNotFound":
         return "activity_not_found"

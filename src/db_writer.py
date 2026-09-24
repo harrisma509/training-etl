@@ -549,7 +549,13 @@ class ActivityNarrativeActivityNotFound(Exception):
     pass
 
 
-def upsert_activity_narrative(cur, activity_id, narrative, observed_at=None):
+def upsert_activity_narrative(
+    cur,
+    activity_id,
+    narrative,
+    observed_at=None,
+    record_inspection=False,
+):
     validate_activity_narrative(narrative)
     if any(
         narrative[field_name]["state"] == "malformed"
@@ -575,7 +581,7 @@ def upsert_activity_narrative(cur, activity_id, narrative, observed_at=None):
             ]
         )
 
-    if len(set_clauses) == 1:
+    if len(set_clauses) == 1 and not record_inspection:
         return False
 
     updates["activity_id"] = str(activity_id)

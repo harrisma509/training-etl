@@ -95,6 +95,22 @@ class NarrativeWriterTests(unittest.TestCase):
         self.assertFalse(upsert_activity_narrative(self.cursor, "123", extract_activity_narrative({}), "observed"))
         self.cursor.execute.assert_not_called()
 
+    def test_backfill_can_checkpoint_omitted_fields_without_marking_them_observed(self):
+        self.assertTrue(
+            upsert_activity_narrative(
+                self.cursor,
+                "123",
+                extract_activity_narrative({}),
+                "observed",
+                record_inspection=True,
+            )
+        )
+        sql, params = self.cursor.execute.call_args.args
+        self.assertIn("narrative_observed_at", sql)
+        self.assertNotIn("description =", sql)
+        self.assertNotIn("private_note =", sql)
+        self.assertEqual(params["narrative_observed_at"], "observed")
+
     def test_malformed_field_aborts_without_sql(self):
         narrative = extract_activity_narrative({"description": 42, "private_note": "synthetic"})
         self.assertFalse(upsert_activity_narrative(self.cursor, "123", narrative, "observed"))

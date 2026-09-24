@@ -9,12 +9,39 @@ from constants import STRAVA_API_BASE, STRAVA_TOKEN_URL
 
 
 class StravaRequestError(RuntimeError):
-    def __init__(self, status_code):
+    def __init__(self, status_code, rate_limits=None):
         super().__init__(f"Strava request failed with HTTP {status_code}")
         self.status_code = status_code
+        self.rate_limits = rate_limits or {}
 
 
-def http_json(method, url, headers=None, data=None):
+class StravaNetworkError(RuntimeError):
+    pass
+
+
+def _safe_rate_limits(headers):
+    if headers is None:
+        return {}
+
+    result = {}
+    for prefix in ("", "Read"):
+        limit_name = f"X-{prefix}RateLimit-Limit"
+        usage_name = f"X-{prefix}RateLimit-Usage"
+        limit = headers.get(limit_name)
+        usage = headers.get(usage_name)
+        if not limit and not usage:
+            continue
+        try:
+            result[prefix.lower() or "overall"] = {
+                "limit": [int(value.strip()) for value in limit.split(",")],
+                "usage": [int(value.strip()) for value in usage.split(",")],
+            }
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return result
+
+
+def http_json_with_metadata(method, url, headers=None, data=None):
     body = None
     final_headers = headers or {}
 
@@ -30,12 +57,17 @@ def http_json(method, url, headers=None, data=None):
     try:
         with urlopen(req, timeout=45) as resp:
             raw = resp.read().decode("utf-8")
-            return json.loads(raw) if raw else None
+            return json.loads(raw) if raw else None, _safe_rate_limits(resp.headers)
     except HTTPError as e:
         e.read()
-        raise StravaRequestError(e.code) from e
+        raise StravaRequestError(e.code, _safe_rate_limits(e.headers)) from e
     except URLError as e:
-        raise RuntimeError(f"Network error calling {url}: {e}") from e
+        raise StravaNetworkError("Network error calling Strava") from e
+
+
+def http_json(method, url, headers=None, data=None):
+    payload, _ = http_json_with_metadata(method, url, headers=headers, data=data)
+    return payload
 
 
 def refresh_access_token(cfg):
@@ -92,8 +124,13 @@ def fetch_activities(access_token, days_back):
 
 
 def fetch_activity_detail(access_token, activity_id):
+    detail, _ = fetch_activity_detail_with_metadata(access_token, activity_id)
+    return detail
+
+
+def fetch_activity_detail_with_metadata(access_token, activity_id):
     url = f"{STRAVA_API_BASE}/activities/{activity_id}?include_all_efforts=false"
-    return http_json("GET", url, headers=auth_header(access_token))
+    return http_json_with_metadata("GET", url, headers=auth_header(access_token))
 
 
 def fetch_hr_zones(access_token):
