@@ -1,4 +1,86 @@
+from collections.abc import Mapping
+
 from constants import M_PER_MI, M_TO_FT
+
+
+NARRATIVE_FIELDS = ("description", "private_note")
+NARRATIVE_STATES = frozenset({
+    "omitted",
+    "null",
+    "empty",
+    "whitespace_only",
+    "nonempty",
+    "malformed",
+})
+
+
+def _narrative_field_patch(activity, field_name):
+    if field_name not in activity:
+        return {
+            "state": "omitted",
+            "key_observed": False,
+            "value": None,
+        }
+
+    value = activity[field_name]
+    if value is None:
+        return {"state": "null", "key_observed": True, "value": None}
+
+    if not isinstance(value, str):
+        return {"state": "malformed", "key_observed": True, "value": None}
+
+    if not value:
+        return {"state": "empty", "key_observed": True, "value": None}
+
+    if not value.strip():
+        return {"state": "whitespace_only", "key_observed": True, "value": None}
+
+    return {"state": "nonempty", "key_observed": True, "value": value}
+
+
+def validate_activity_narrative(narrative):
+    if not isinstance(narrative, Mapping):
+        raise ValueError("narrative patch must be a mapping")
+    if set(narrative) != set(NARRATIVE_FIELDS):
+        raise ValueError("narrative patch fields are not allowlisted")
+
+    for field_name in NARRATIVE_FIELDS:
+        patch = narrative[field_name]
+        if not isinstance(patch, Mapping):
+            raise ValueError("narrative field patch must be a mapping")
+        if set(patch) != {"state", "key_observed", "value"}:
+            raise ValueError("narrative field patch shape is invalid")
+
+        state = patch["state"]
+        key_observed = patch["key_observed"]
+        value = patch["value"]
+        if state not in NARRATIVE_STATES or not isinstance(key_observed, bool):
+            raise ValueError("narrative field patch state is invalid")
+        if state == "omitted" and (key_observed or value is not None):
+            raise ValueError("omitted narrative field patch is inconsistent")
+        if state in {"null", "empty", "whitespace_only", "malformed"} and (
+            not key_observed or value is not None
+        ):
+            raise ValueError("cleared narrative field patch is inconsistent")
+        if state == "nonempty" and (
+            not key_observed
+            or not isinstance(value, str)
+            or not value
+            or not value.strip()
+        ):
+            raise ValueError("nonempty narrative field patch is inconsistent")
+
+    return narrative
+
+
+def extract_activity_narrative(activity):
+    if not isinstance(activity, Mapping):
+        raise ValueError("activity detail must be a mapping")
+
+    return validate_activity_narrative({
+        field_name: _narrative_field_patch(activity, field_name)
+        for field_name in NARRATIVE_FIELDS
+    })
 
 
 def activity_local_date(activity):

@@ -8,6 +8,12 @@ from urllib.request import Request, urlopen
 from constants import STRAVA_API_BASE, STRAVA_TOKEN_URL
 
 
+class StravaRequestError(RuntimeError):
+    def __init__(self, status_code):
+        super().__init__(f"Strava request failed with HTTP {status_code}")
+        self.status_code = status_code
+
+
 def http_json(method, url, headers=None, data=None):
     body = None
     final_headers = headers or {}
@@ -26,8 +32,8 @@ def http_json(method, url, headers=None, data=None):
             raw = resp.read().decode("utf-8")
             return json.loads(raw) if raw else None
     except HTTPError as e:
-        detail = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"HTTP {e.code} calling {url}: {detail}") from e
+        e.read()
+        raise StravaRequestError(e.code) from e
     except URLError as e:
         raise RuntimeError(f"Network error calling {url}: {e}") from e
 

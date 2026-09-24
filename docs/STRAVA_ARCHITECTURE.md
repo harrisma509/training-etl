@@ -32,7 +32,7 @@ Detailed retrieval uses `GET /activities/{id}?include_all_efforts=false` through
 
 The canonical writer performs activity upserts and derived rebuild work on one database connection and commits atomically. Targeted resync uses a transaction-level advisory lock and explicit commit or rollback behavior. External provider calls are outside the database write transaction.
 
-The current normalizer retains standard activity identity, date, name, sport, duration, distance, elevation, heart-rate, gear, and classification fields. It does not retain description or a private-note field. The `raw_json` column stores JSON serialized from the normalized activity dictionary; it is not the provider-original response and is not a narrative contract.
+The current normalizer retains standard activity identity, date, name, sport, duration, distance, elevation, heart-rate, gear, and classification fields. Slice 1 adds a separate structured narrative extractor for detailed activity responses, but normal summary ingestion still does not request or persist narrative. The `raw_json` column stores JSON serialized from the normalized activity dictionary; it is not the provider-original response and is not a narrative contract.
 
 ### Current application limits
 
@@ -60,7 +60,7 @@ flowchart LR
     P -.->|future, separately approved narrative contract| W
 ```
 
-The solid path is current behavior. The dotted narrative path is planned only; no description or private-note field is currently normalized, persisted, exposed, searched, exported, or sent to Coach.
+The solid path is current behavior. Slice 1 adds a pilot-only dotted path: explicit detailed-activity fetches can persist allowlisted narrative fields without entering normal aggregate rebuilds. Narrative remains unexposed, unsearched, unexported, and outside Coach context.
 
 ## Current database contract
 
@@ -70,7 +70,16 @@ Daily and Weekly builders, gear aggregation, targeted resync, the Training API, 
 
 Some existing reads use broad row selection, including `SELECT *` in targeted-resync support code. Any future sensitive columns require explicit query and serializer review before they can be safely exposed. Full PostgreSQL backups include the complete `strava_activities` table, including `raw_json`; backup retention and account-disconnect deletion would therefore be operational concerns for any future narrative storage.
 
-No narrative schema change is current behavior, and this document does not prescribe a migration.
+Slice 1 has an additive, manually applied SQL artifact at `sql/strava_activity_narrative_v1.sql` and a separate destructive rollback at `sql/strava_activity_narrative_v1_rollback.sql`. It adds nullable `description` and `private_note` text columns, per-field `*_observed` booleans, and `narrative_observed_at`. Omitted fields preserve the stored value and observation state; `null`, empty, and whitespace-only values clear the field and mark that field observed; nonempty strings preserve exact Unicode and line breaks; malformed values abort the whole activity before a database transaction; failed detail fetches preserve stored data. The writer allowlists only `description` and `private_note`, parameterizes values, and updates the shared observation timestamp only when at least one approved field is observed and persisted. The pilot independently commits each activity. It does not rebuild Daily, Weekly, load, fitness/fatigue/form, TID, audit, yearly, or other aggregates.
+
+The pilot entry point is `src/strava_narrative_pilot.py`. Preview is local-only and accepts one to three repeatable IDs:
+
+```text
+python /app/strava_narrative_pilot.py --activity-id 20302298948 --activity-id 19880001202 --activity-id 18534000278 --preview
+python /app/strava_narrative_pilot.py --activity-id 20302298948 --activity-id 19880001202 --activity-id 18534000278 --apply
+```
+
+Apply refreshes the token once, makes at most three detail calls, and emits one sanitized JSON object per activity followed by a sanitized JSON summary object. Output contains only IDs, request/persistence outcomes, allowlisted failure classes, field states, observation flags, counts, and timestamps. It does not print narrative text, response bodies, names, athlete data, route data, or credentials. SQL is not included in the current ETL deployment package; apply it separately after review. A full-history backfill is not part of Slice 1.
 
 ## Current API and consumer surfaces
 
@@ -88,7 +97,7 @@ The public API contract reviewed on 2026-09-23 did not establish an exact privat
 
 The eventual product target is every locally stored Strava activity since 2012, not only rides. The supplied handoff identifies approximately 3,860 activities; that is a supplied planning count, not a repository- or database-independent measurement verified during this investigation.
 
-Description ingestion, private-note feasibility, search/export, and Coach use are separate decisions. Uncertainty in a later consumer does not by itself invalidate the technical investigation of bounded ingestion, but Coach use requires a later isolated architecture and product decision.
+Slice 1 verified description extraction from the documented `DetailedActivity` model and treats `private_note` as an optional allowlisted key without claiming it is an official documented field. Description ingestion, private-note feasibility, search/export, and Coach use are separate decisions. Uncertainty in a later consumer does not by itself invalidate bounded ingestion, but Coach use requires a later isolated architecture and product decision.
 
 ## Strava API change procedure
 

@@ -6,7 +6,11 @@ from zoneinfo import ZoneInfo
 
 import psycopg
 from psycopg.rows import dict_row
-from activity_utils import classify_activity
+from activity_utils import (
+    NARRATIVE_FIELDS,
+    classify_activity,
+    validate_activity_narrative,
+)
 from daily_builder import build_daily_training
 from fitness_fatigue_builder import build_fitness_fatigue, validate_fitness_fatigue_rows
 from settings import get_fitness_fatigue_config
@@ -539,6 +543,51 @@ def upsert_strava_activities(cur, activities):
                     f"Dict value found in strava_activities params: key={key}, value={value}"
                 )
         cur.execute(sql, params)
+
+
+class ActivityNarrativeActivityNotFound(Exception):
+    pass
+
+
+def upsert_activity_narrative(cur, activity_id, narrative, observed_at=None):
+    validate_activity_narrative(narrative)
+    if any(
+        narrative[field_name]["state"] == "malformed"
+        for field_name in NARRATIVE_FIELDS
+    ):
+        return False
+    updates = {
+        "narrative_observed_at": observed_at,
+    }
+    set_clauses = ["narrative_observed_at = %(narrative_observed_at)s"]
+
+    for field_name in NARRATIVE_FIELDS:
+        patch = narrative[field_name]
+        if patch["state"] in {"omitted", "malformed"}:
+            continue
+
+        updates[field_name] = patch["value"]
+        updates[f"{field_name}_observed"] = patch["key_observed"]
+        set_clauses.extend(
+            [
+                f"{field_name} = %({field_name})s",
+                f"{field_name}_observed = %({field_name}_observed)s",
+            ]
+        )
+
+    if len(set_clauses) == 1:
+        return False
+
+    updates["activity_id"] = str(activity_id)
+    sql = f"""
+        UPDATE strava_activities
+        SET {', '.join(set_clauses)}
+        WHERE activity_id = %(activity_id)s
+    """
+    cur.execute(sql, updates)
+    if getattr(cur, "rowcount", 1) == 0:
+        raise ActivityNarrativeActivityNotFound()
+    return True
 
 
 def upsert_daily_training(cur, daily_rows):
