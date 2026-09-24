@@ -34,6 +34,17 @@ The canonical writer performs activity upserts and derived rebuild work on one d
 
 The current normalizer retains standard activity identity, date, name, sport, duration, distance, elevation, heart-rate, gear, and classification fields. It does not retain description or a private-note field. The `raw_json` column stores JSON serialized from the normalized activity dictionary; it is not the provider-original response and is not a narrative contract.
 
+### Current application limits
+
+The current Strava application limits are:
+
+- Overall rate limit: 400 requests per 15 minutes and 4,000 requests per day.
+- Read rate limit: 200 requests per 15 minutes and 2,000 requests per day.
+- Athletes allowed to connect: 10.
+- Athletes currently connected: 1.
+
+Backfill and detail-fetch planning must use the read limits, account for normal sync and calculation calls, and remain within the connected-athlete allowance.
+
 ## Data flow
 
 ```mermaid
