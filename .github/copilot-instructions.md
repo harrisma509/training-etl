@@ -14,6 +14,8 @@ Feature documents define detailed contracts and current behavior.# GitHub Copilo
 
 This repo contains the ETL, data builders, database writers, schema SQL, Strava sync logic, weekly audit computation, and future service-log import work for the Training Dashboard.
 
+Before any Strava-related work, read `docs/STRAVA_ARCHITECTURE.md` and verify the latest official Strava developer documentation and API reference. Record relevant contract findings before changing Strava code, schema, OAuth, endpoints, fields, webhooks, rate handling, retention, or integrations.
+
 The separate `training-web` repo owns the FastAPI web app, dashboard routes, browser UI, static frontend files, and NAS web deployment.
 
 ## Repo Boundary
