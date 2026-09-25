@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 
 from activity_utils import extract_activity_narrative, normalize_activity, sec_to_hms
 from daily_builder import build_daily_training
-from db_writer import connect_db, fetch_existing_activity_ids, upsert_activity_narrative
+from db_writer import (
+    connect_db,
+    fetch_existing_activity_ids,
+    fetch_recent_narrative_refresh_ids,
+    upsert_activity_narrative,
+)
 from logging_config import configure_logging
 from settings import get_config
 from strava_client import fetch_activities, fetch_activity_detail, refresh_access_token
@@ -32,7 +37,7 @@ def identify_new_activity_ids(rows, existing_activity_ids):
     return new_activity_ids
 
 
-def enrich_new_activity_narratives(cfg, access_token, activity_ids):
+def enrich_new_activity_narratives(cfg, access_token, activity_ids, observed_at=None):
     result = {
         "detail_requests_attempted": 0,
         "narrative_inspections_succeeded": 0,
@@ -52,14 +57,14 @@ def enrich_new_activity_narratives(cfg, access_token, activity_ids):
                 for field_name in ("description", "private_note")
             ):
                 raise ValueError("malformed narrative")
-            observed_at = datetime.now(timezone.utc)
+            inspection_time = observed_at or datetime.now(timezone.utc)
             with connect_db(cfg) as conn:
                 with conn.cursor() as cur:
                     upsert_activity_narrative(
                         cur,
                         activity_id,
                         narrative,
-                        observed_at=observed_at,
+                        observed_at=inspection_time,
                         record_inspection=True,
                     )
                 conn.commit()
@@ -73,6 +78,19 @@ def enrich_new_activity_narratives(cfg, access_token, activity_ids):
             )
 
     return result
+
+
+def merge_narrative_results(*results):
+    merged = {
+        "detail_requests_attempted": 0,
+        "narrative_inspections_succeeded": 0,
+        "narrative_inspections_failed": 0,
+        "narrative_inspections_skipped": 0,
+    }
+    for result in results:
+        for key in merged:
+            merged[key] += result.get(key, 0)
+    return merged
 
 
 def main():
@@ -109,7 +127,8 @@ def main():
         )
         weekly = build_weekly_training(daily)
 
-    run_at_utc = datetime.now(timezone.utc).isoformat()
+    run_timestamp = datetime.now(timezone.utc)
+    run_at_utc = run_timestamp.isoformat()
 
     write_result = write_training_to_db(
         cfg=cfg,
@@ -133,13 +152,33 @@ def main():
         "narrative_inspections_failed": 0,
         "narrative_inspections_skipped": len(rows) - len(new_activity_ids),
     }
-    if cfg.get("WRITE_DB") and new_activity_ids:
-        narrative_result = enrich_new_activity_narratives(
+    if cfg.get("WRITE_DB"):
+        new_narrative_result = enrich_new_activity_narratives(
             cfg,
             access_token,
             new_activity_ids,
+            observed_at=run_timestamp,
+        )
+        recent_ids = fetch_recent_narrative_refresh_ids(
+            cfg,
+            run_timestamp,
+            excluded_ids=new_activity_ids,
+        )
+        recent_narrative_result = enrich_new_activity_narratives(
+            cfg,
+            access_token,
+            recent_ids,
+            observed_at=run_timestamp,
+        )
+        narrative_result = merge_narrative_results(
+            new_narrative_result,
+            recent_narrative_result,
         )
         narrative_result["narrative_inspections_skipped"] = len(rows) - len(new_activity_ids)
+        logger.info("Recent narrative refresh candidates: %s", len(recent_ids))
+        logger.info("Recent narrative refresh attempted: %s", recent_narrative_result["detail_requests_attempted"])
+        logger.info("Recent narrative refresh succeeded: %s", recent_narrative_result["narrative_inspections_succeeded"])
+        logger.info("Recent narrative refresh failed: %s", recent_narrative_result["narrative_inspections_failed"])
 
     logger.info("Activities pulled: %s", len(rows))
     logger.info("New activities discovered: %s", len(new_activity_ids))

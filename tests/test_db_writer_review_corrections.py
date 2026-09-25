@@ -190,7 +190,7 @@ class DbWriterReviewCorrectionTests(unittest.TestCase):
         ) as bounded_builder, patch(
             "sync_training.write_training_to_db",
             return_value={"daily_rows": [daily_row], "weekly_rows": [weekly_row], "warnings": ["warning"]},
-        ):
+        ), patch("sync_training.fetch_recent_narrative_refresh_ids", return_value=[]):
             sync_training.main()
 
         gear_map.assert_not_called()

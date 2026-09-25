@@ -99,6 +99,14 @@ python /app/strava_narrative_backfill.py --apply --activity-id 20302298948 --act
 
 Operators should avoid deploying or restarting the ETL container during an active backfill or normal sync. A quota stop leaves completed activities committed; rerun the same default command on the next UTC quota day. Inspect the final sanitized summary and database coverage queries before increasing the batch or using `--refresh-observed`.
 
+### Normal-sync recent narrative refresh
+
+Normal sync performs the initial DetailedActivity narrative inspection for each genuinely new activity after structured persistence. It also automatically refreshes known activities whose `date_local` is today or yesterday in `America/Denver`, provided `narrative_observed_at` is null or at least three hours old. The selector orders candidates by `date_local DESC, activity_id DESC`, limits the result to 10 activities, and excludes every activity ID already attempted as new during the same sync run. This adds at most 10 known-activity detail calls per normal sync; older activities and activities inside the cooldown remain untouched and use Resync Day for immediate or older corrections.
+
+The normal sync captures one UTC run timestamp for eligibility and successful inspection checkpoints. `narrative_observed_at` therefore means the most recent successful well-formed detailed narrative inspection. Detail fetch, malformed-input, and narrative persistence failures are isolated per activity: stored narrative and the prior checkpoint survive, later candidates continue, and structured sync is not rolled back. Narrative-only updates do not rebuild aggregates. Safe normal-sync counters report new activity discovery, detail attempts, recent candidates, recent attempts, successes, and failures without logging narrative values or provider payloads.
+
+This policy uses bounded polling because the documented Strava activity webhook update fields cover title, type, and privacy, not description or private-note edits. It does not rely on webhooks and does not invoke the historical backfill.
+
 ## Current API and consumer surfaces
 
 The ETL-side Training API and internal API provide bounded, authenticated training data and approved ETL operations. The web application uses those boundaries and selected database-backed routes for dashboard presentation. Current activity search is limited and does not search narrative. The web repository now owns a narrow read-only `/api/activities/{activity_id}/narrative` route for on-demand Daily display; there is still no narrative export or search contract.

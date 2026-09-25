@@ -1,7 +1,7 @@
 import json
 import logging
 from collections.abc import Mapping
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -14,9 +14,17 @@ from activity_utils import (
 from daily_builder import build_daily_training
 from fitness_fatigue_builder import build_fitness_fatigue, validate_fitness_fatigue_rows
 from settings import get_fitness_fatigue_config
+from constants import APP_TIMEZONE
 from weekly_builder import build_weekly_training
 
 logger = logging.getLogger(__name__)
+
+RECENT_NARRATIVE_REFRESH_COOLDOWN_HOURS = 1.5
+# Wait 90 minutes between detail fetches so later description or private-note edits sync automatically without excessive Strava API calls.
+
+RECENT_NARRATIVE_REFRESH_LIMIT = 10
+# Refresh at most 10 previously synced recent activities per normal sync to keep Strava API usage bounded.
+
 
 
 def connect_db(cfg):
@@ -144,6 +152,38 @@ def fetch_existing_activity_ids(cfg, activities):
                 (activity_ids,),
             )
             return {str(row["activity_id"]) for row in cur.fetchall()}
+
+
+def fetch_recent_narrative_refresh_ids(cfg, observed_at, excluded_ids=()):
+    local_date = observed_at.astimezone(ZoneInfo(APP_TIMEZONE)).date()
+    # Used to refresh activities from the current local calendar day and the previous local calendar day.
+    cutoff = observed_at - timedelta(hours=RECENT_NARRATIVE_REFRESH_COOLDOWN_HOURS)
+    excluded_ids = [str(activity_id) for activity_id in excluded_ids]
+
+    with connect_db(cfg) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT activity_id
+                FROM public.strava_activities
+                WHERE date_local BETWEEN %s AND %s
+                  AND (
+                      narrative_observed_at IS NULL
+                      OR narrative_observed_at <= %s
+                  )
+                  AND NOT (activity_id = ANY(%s))
+                ORDER BY date_local DESC, activity_id DESC
+                LIMIT %s
+                """,
+                (
+                    local_date - timedelta(days=1),
+                    local_date,
+                    cutoff,
+                    excluded_ids,
+                    RECENT_NARRATIVE_REFRESH_LIMIT,
+                ),
+            )
+            return [str(row["activity_id"]) for row in cur.fetchall()]
 
 
 def affected_activity_dates(old_dates, activities):

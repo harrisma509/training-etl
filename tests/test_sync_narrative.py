@@ -1,5 +1,6 @@
 import sys
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -9,6 +10,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import sync_training
+from db_writer import fetch_recent_narrative_refresh_ids
 
 
 class Connection:
@@ -47,6 +49,46 @@ class SyncNarrativeTests(unittest.TestCase):
     def test_no_new_activity_ids_means_no_detail_work(self):
         rows = [{"id": "1"}, {"id": "1"}]
         self.assertEqual(sync_training.identify_new_activity_ids(rows, {1}), [])
+
+    def test_recent_refresh_selector_uses_local_two_day_window_and_cutoff(self):
+        cursor = Mock()
+        cursor.fetchall.return_value = [{"activity_id": "9"}, {"activity_id": "8"}]
+        connection = Connection()
+        connection.cursor_value = cursor
+        observed_at = datetime(2026, 9, 25, 0, 30, tzinfo=timezone.utc)
+
+        with patch("db_writer.connect_db", return_value=connection):
+            result = fetch_recent_narrative_refresh_ids(
+                {"DB_HOST": "test"}, observed_at, excluded_ids=[7]
+            )
+
+        self.assertEqual(result, ["9", "8"])
+        sql, params = cursor.execute.call_args.args
+        self.assertIn("date_local BETWEEN %s AND %s", sql)
+        self.assertIn("narrative_observed_at <= %s", sql)
+        self.assertIn("ORDER BY date_local DESC, activity_id DESC", sql)
+        self.assertIn("LIMIT %s", sql)
+        self.assertEqual(str(params[0]), "2026-09-23")
+        self.assertEqual(str(params[1]), "2026-09-24")
+        self.assertEqual(params[2], observed_at - timedelta(hours=1.5))
+        self.assertEqual(params[3], ["7"])
+        self.assertEqual(params[4], 10)
+
+    def test_narrative_enrichment_accepts_one_run_timestamp(self):
+        connection = Connection()
+        run_timestamp = "run timestamp"
+        with patch.object(
+            sync_training,
+            "fetch_activity_detail",
+            return_value={"description": "synthetic"},
+        ), patch.object(sync_training, "connect_db", return_value=connection), patch.object(
+            sync_training, "upsert_activity_narrative", return_value=True
+        ) as writer:
+            sync_training.enrich_new_activity_narratives(
+                {"DB_HOST": "test"}, "token", ["1"], observed_at=run_timestamp
+            )
+
+        self.assertEqual(writer.call_args.kwargs["observed_at"], run_timestamp)
 
     def test_each_new_activity_is_enriched_once_and_failures_are_isolated(self):
         connections = [Connection(), Connection()]
