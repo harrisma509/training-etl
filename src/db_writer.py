@@ -124,6 +124,28 @@ def fetch_activity_dates(cur, activities):
     return {date_text(row["date_local"]) for row in cur.fetchall() if row.get("date_local") is not None}
 
 
+def fetch_existing_activity_ids(cfg, activities):
+    activity_ids = list(dict.fromkeys(
+        str(activity.get("id"))
+        for activity in activities
+        if activity.get("id") is not None
+    ))
+    if not activity_ids:
+        return set()
+
+    with connect_db(cfg) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT activity_id
+                FROM strava_activities
+                WHERE activity_id = ANY(%s)
+                """,
+                (activity_ids,),
+            )
+            return {str(row["activity_id"]) for row in cur.fetchall()}
+
+
 def affected_activity_dates(old_dates, activities):
     new_dates = {
         date_text(activity.get("date_local"))

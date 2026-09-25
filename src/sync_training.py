@@ -2,16 +2,77 @@ import logging
 import sys
 from datetime import datetime, timezone
 
-from activity_utils import normalize_activity, sec_to_hms
+from activity_utils import extract_activity_narrative, normalize_activity, sec_to_hms
 from daily_builder import build_daily_training
+from db_writer import connect_db, fetch_existing_activity_ids, upsert_activity_narrative
 from logging_config import configure_logging
 from settings import get_config
-from strava_client import fetch_activities, refresh_access_token
+from strava_client import fetch_activities, fetch_activity_detail, refresh_access_token
 from weekly_builder import build_weekly_training
-from db_writer import write_training_to_db
 from gear_db import fetch_gear_display_map
+from db_writer import write_training_to_db
 
 logger = logging.getLogger(__name__)
+
+
+def identify_new_activity_ids(rows, existing_activity_ids):
+    new_activity_ids = []
+    seen_activity_ids = set()
+    existing_activity_ids = {str(activity_id) for activity_id in existing_activity_ids}
+
+    for row in rows:
+        activity_id = row.get("id")
+        if activity_id is None:
+            continue
+        activity_id = str(activity_id)
+        if activity_id not in existing_activity_ids and activity_id not in seen_activity_ids:
+            new_activity_ids.append(activity_id)
+            seen_activity_ids.add(activity_id)
+
+    return new_activity_ids
+
+
+def enrich_new_activity_narratives(cfg, access_token, activity_ids):
+    result = {
+        "detail_requests_attempted": 0,
+        "narrative_inspections_succeeded": 0,
+        "narrative_inspections_failed": 0,
+        "narrative_inspections_skipped": 0,
+    }
+
+    for activity_id in activity_ids:
+        result["detail_requests_attempted"] += 1
+        try:
+            detail = fetch_activity_detail(access_token, activity_id)
+            if not detail:
+                raise RuntimeError("empty detail response")
+            narrative = extract_activity_narrative(detail)
+            if any(
+                narrative[field_name]["state"] == "malformed"
+                for field_name in ("description", "private_note")
+            ):
+                raise ValueError("malformed narrative")
+            observed_at = datetime.now(timezone.utc)
+            with connect_db(cfg) as conn:
+                with conn.cursor() as cur:
+                    upsert_activity_narrative(
+                        cur,
+                        activity_id,
+                        narrative,
+                        observed_at=observed_at,
+                        record_inspection=True,
+                    )
+                conn.commit()
+            result["narrative_inspections_succeeded"] += 1
+        except Exception:
+            result["narrative_inspections_failed"] += 1
+            logger.warning(
+                "Narrative enrichment failed for activity_id=%s",
+                activity_id,
+                exc_info=True,
+            )
+
+    return result
 
 
 def main():
@@ -26,6 +87,11 @@ def main():
 
     activities = fetch_activities(access_token, cfg["DAYS_BACK"])
     rows = [normalize_activity(activity) for activity in activities]
+
+    new_activity_ids = []
+    if cfg.get("WRITE_DB"):
+        existing_activity_ids = fetch_existing_activity_ids(cfg, rows)
+        new_activity_ids = identify_new_activity_ids(rows, existing_activity_ids)
 
     gear_display_map = fetch_gear_display_map(cfg) if not cfg.get("WRITE_DB") else {}
     logger.info("Gear records loaded from DB: %s", len(gear_display_map))
@@ -61,7 +127,26 @@ def main():
         weekly = write_result["weekly_rows"]
         warnings = write_result["warnings"]
 
+    narrative_result = {
+        "detail_requests_attempted": 0,
+        "narrative_inspections_succeeded": 0,
+        "narrative_inspections_failed": 0,
+        "narrative_inspections_skipped": len(rows) - len(new_activity_ids),
+    }
+    if cfg.get("WRITE_DB") and new_activity_ids:
+        narrative_result = enrich_new_activity_narratives(
+            cfg,
+            access_token,
+            new_activity_ids,
+        )
+        narrative_result["narrative_inspections_skipped"] = len(rows) - len(new_activity_ids)
+
     logger.info("Activities pulled: %s", len(rows))
+    logger.info("New activities discovered: %s", len(new_activity_ids))
+    logger.info("Detail requests attempted: %s", narrative_result["detail_requests_attempted"])
+    logger.info("Narrative inspections succeeded: %s", narrative_result["narrative_inspections_succeeded"])
+    logger.info("Narrative inspections failed: %s", narrative_result["narrative_inspections_failed"])
+    logger.info("Narrative inspections skipped: %s", narrative_result["narrative_inspections_skipped"])
     logger.info("Daily rows built: %s", len(daily))
 
     for row in daily:

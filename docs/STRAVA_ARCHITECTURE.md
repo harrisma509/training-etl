@@ -32,7 +32,7 @@ Detailed retrieval uses `GET /activities/{id}?include_all_efforts=false` through
 
 The canonical writer performs activity upserts and derived rebuild work on one database connection and commits atomically. Targeted resync uses a transaction-level advisory lock and explicit commit or rollback behavior. External provider calls are outside the database write transaction.
 
-The current normalizer retains standard activity identity, date, name, sport, duration, distance, elevation, heart-rate, gear, and classification fields. Slice 1 adds a separate structured narrative extractor for detailed activity responses, but normal summary ingestion still does not request or persist narrative. The `raw_json` column stores JSON serialized from the normalized activity dictionary; it is not the provider-original response and is not a narrative contract.
+The current normalizer retains standard activity identity, date, name, sport, duration, distance, elevation, heart-rate, gear, and classification fields. The list endpoint supplies SummaryActivity, so normal sync performs one bounded detail request for each genuinely new activity after structured persistence; known activities receive no repeated detail request. The detail response supplies the allowlisted narrative fields, which are persisted through the separate omission-safe narrative writer. A detail or narrative failure is isolated from structured ingestion and does not stop later new-activity enrichment. The `raw_json` column stores JSON serialized from the normalized activity dictionary; it is not the provider-original response and is not a narrative contract.
 
 ### Current application limits
 
@@ -60,7 +60,7 @@ flowchart LR
     P -.->|future, separately approved narrative contract| W
 ```
 
-The solid path is current behavior. Slice 1 adds a pilot-only dotted path: explicit detailed-activity fetches can persist allowlisted narrative fields without entering normal aggregate rebuilds. Narrative remains unexposed, unsearched, unexported, and outside Coach context.
+The solid path is current behavior. Targeted activity resync reuses its one DetailedActivity response for both structured normalization and narrative extraction. Narrative-only changes do not enter changed-field classification and therefore do not rebuild Daily, Weekly, or Fitness/Fatigue/Form aggregates. Historical narrative backfill remains a standalone maintenance and recovery utility; normal sync does not perform historical backfill or broad retries. Narrative remains unexposed, unsearched, unexported, and outside Coach context.
 
 ## Current database contract
 

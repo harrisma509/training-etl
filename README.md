@@ -643,7 +643,7 @@ Current behavior is intentionally simple:
 
 - `resync_activity()` keeps its PostgreSQL transaction and advisory-lock safety
 - the API does not currently provide a queue
-- the API does not currently use `sync_request`
+- the web dashboard may enqueue `activity_resync` requests through `sync_request`; the runner dispatches those rows to the targeted activity-resync entry point and keeps full-sync requests on the existing path
 - the API does not currently poll
 - the API waits synchronously
 - browser or proxy duplicate-click handling is future work unless a guard is added later

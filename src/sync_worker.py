@@ -1,4 +1,5 @@
 import logging
+import json
 import os
 import subprocess
 import time
@@ -116,7 +117,9 @@ def get_pending_request(conn):
         cur.execute("""
             SELECT
                 id,
-                days_back
+                days_back,
+                request_type,
+                activity_id
             FROM sync_request
             WHERE status = 'pending'
             ORDER BY requested_at_utc ASC
@@ -138,16 +141,17 @@ def mark_request_running(conn, request_id):
     conn.commit()
 
 
-def mark_request_completed(conn, request_id):
+def mark_request_completed(conn, request_id, result=None):
     with conn.cursor() as cur:
         cur.execute("""
             UPDATE sync_request
             SET
                 status = 'completed',
                 completed_at_utc = now(),
-                message = 'Completed by sync worker'
+                message = 'Completed by sync worker',
+                result_json = %s
             WHERE id = %s
-        """, (request_id,))
+        """, (json.dumps(result) if result is not None else None, request_id))
     conn.commit()
 
 
@@ -238,6 +242,20 @@ def run_sync(days_back):
     return result.stdout.strip()
 
 
+def run_activity_resync(activity_id):
+    result = subprocess.run(
+        ["python", "-u", "/app/resync_activity.py", str(activity_id)],
+        env=os.environ.copy(),
+        text=True,
+        capture_output=True,
+        timeout=900,
+    )
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip() or "resync_activity.py failed"
+        raise RuntimeError(message)
+    return {"status": "success", "activity_id": int(activity_id)}
+
+
 def process_once():
     # One iteration of polling, with advisory lock guarding against
     # concurrent worker execution.
@@ -259,8 +277,12 @@ def process_once():
             mark_request_running(conn, request_id)
 
             try:
-                run_sync(days_back)
-                mark_request_completed(conn, request_id)
+                if pending.get("request_type") == "activity_resync":
+                    result = run_activity_resync(pending["activity_id"])
+                else:
+                    run_sync(days_back)
+                    result = None
+                mark_request_completed(conn, request_id, result)
                 logger.info("Completed sync_request id=%s", request_id)
             except Exception as exc:
                 mark_request_failed(conn, request_id, str(exc))

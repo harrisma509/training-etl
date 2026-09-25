@@ -1,0 +1,97 @@
+cat > /tmp/run_strava_backfill_max_daily.sh <<'SCRIPT'
+#!/usr/bin/env bash
+
+set -u
+
+LOG_DIR="/opt/training/logs"
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
+
+MASTER_LOG="${LOG_DIR}/strava_narrative_max_daily_${RUN_ID}.log"
+STATUS_FILE="${LOG_DIR}/strava_narrative_max_daily_${RUN_ID}.status"
+
+PLANNED_BATCHES=12
+BATCH_SIZE=150
+SLEEP_SECONDS=960
+DAILY_HEADROOM=200
+
+mkdir -p "$LOG_DIR"
+
+echo "started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a "$MASTER_LOG"
+echo "planned_batches=${PLANNED_BATCHES}" | tee -a "$MASTER_LOG"
+echo "batch_size=${BATCH_SIZE}" | tee -a "$MASTER_LOG"
+echo "maximum_attempts=$((PLANNED_BATCHES * BATCH_SIZE))" | tee -a "$MASTER_LOG"
+echo "sleep_seconds=${SLEEP_SECONDS}" | tee -a "$MASTER_LOG"
+echo "daily_headroom=${DAILY_HEADROOM}" | tee -a "$MASTER_LOG"
+
+OVERALL_EXIT=0
+COMPLETED_BATCHES=0
+
+for BATCH in $(seq 1 "$PLANNED_BATCHES"); do
+    BATCH_START="$(date -u +%Y%m%dT%H%M%SZ)"
+    BATCH_LOG="${LOG_DIR}/strava_narrative_backfill_${RUN_ID}_batch_${BATCH}_${BATCH_START}.jsonl"
+
+    echo "batch=${BATCH} started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ) log=${BATCH_LOG}" \
+        | tee -a "$MASTER_LOG"
+
+    docker exec training-runner python /app/strava_narrative_backfill.py \
+        --apply \
+        --start-date 2012-01-01 \
+        --batch-size "$BATCH_SIZE" \
+        --max-requests "$BATCH_SIZE" \
+        --daily-headroom "$DAILY_HEADROOM" \
+        > "$BATCH_LOG" 2>&1
+
+    EXIT_CODE=$?
+    COMPLETED_BATCHES=$BATCH
+
+    echo "batch=${BATCH} exit_code=${EXIT_CODE} finished_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        | tee -a "$MASTER_LOG"
+
+    tail -n 1 "$BATCH_LOG" >> "$MASTER_LOG"
+
+    if [ "$EXIT_CODE" -eq 2 ]; then
+        echo "batch=${BATCH} quota_stop=true ending_run=true" | tee -a "$MASTER_LOG"
+        OVERALL_EXIT=2
+        break
+    fi
+
+    if [ "$EXIT_CODE" -eq 1 ]; then
+        echo "batch=${BATCH} completed_with_activity_failure=true continuing=true" \
+            | tee -a "$MASTER_LOG"
+
+        if [ "$OVERALL_EXIT" -eq 0 ]; then
+            OVERALL_EXIT=1
+        fi
+    fi
+
+    if [ "$BATCH" -lt "$PLANNED_BATCHES" ]; then
+        echo "batch=${BATCH} sleeping_seconds=${SLEEP_SECONDS}" | tee -a "$MASTER_LOG"
+        sleep "$SLEEP_SECONDS"
+    fi
+done
+
+echo "completed_batches=${COMPLETED_BATCHES}" | tee -a "$MASTER_LOG"
+echo "finished_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a "$MASTER_LOG"
+echo "$OVERALL_EXIT" > "$STATUS_FILE"
+echo "status_file=${STATUS_FILE}" | tee -a "$MASTER_LOG"
+echo "overall_exit=${OVERALL_EXIT}" | tee -a "$MASTER_LOG"
+
+exit "$OVERALL_EXIT"
+SCRIPT
+
+chmod +x /tmp/run_strava_backfill_max_daily.sh
+
+RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+NOHUP_LOG="/opt/training/logs/strava_narrative_max_daily_nohup_${RUN_STAMP}.log"
+PID_FILE="/opt/training/logs/strava_narrative_max_daily_${RUN_STAMP}.pid"
+
+nohup /tmp/run_strava_backfill_max_daily.sh \
+    > "$NOHUP_LOG" 2>&1 &
+
+PID=$!
+echo "$PID" > "$PID_FILE"
+
+echo "pid=$PID"
+echo "pid_file=$PID_FILE"
+echo "nohup_log=$NOHUP_LOG"
+echo "Backfill launched. You can disconnect safely."

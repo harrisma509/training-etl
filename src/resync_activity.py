@@ -2,17 +2,18 @@ import argparse
 import json
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import psycopg
 from psycopg.rows import dict_row
 
-from activity_utils import normalize_activity
+from activity_utils import extract_activity_narrative, normalize_activity
 from daily_builder import build_daily_training
 from db_writer import (
     db_activity_to_row,
     rebuild_fitness_fatigue,
     replace_weekly_training,
+    upsert_activity_narrative,
     upsert_daily_training,
     upsert_strava_activities,
 )
@@ -68,7 +69,7 @@ def fetch_activity_detail_row(access_token, activity_id):
     detail = fetch_activity_detail(access_token, activity_id)
     if not detail:
         raise RuntimeError(f"Strava activity {activity_id} not found")
-    return normalize_activity(detail)
+    return detail, normalize_activity(detail)
 
 
 def fetch_existing_activity(cfg, activity_id):
@@ -404,7 +405,8 @@ def resync_activity(cfg, activity_id):
 
     token = refresh_access_token(cfg)
     access_token = token["access_token"]
-    refreshed = fetch_activity_detail_row(access_token, activity_id)
+    detail, refreshed = fetch_activity_detail_row(access_token, activity_id)
+    narrative = extract_activity_narrative(detail)
 
     with psycopg.connect(
         host=cfg["DB_HOST"],
@@ -431,6 +433,13 @@ def resync_activity(cfg, activity_id):
                 warnings = []
 
                 upsert_strava_activities(cur, [refreshed])
+                narrative_persisted = upsert_activity_narrative(
+                    cur,
+                    activity_id,
+                    narrative,
+                    observed_at=datetime.now(timezone.utc),
+                    record_inspection=True,
+                )
 
                 gear_display_map = fetch_gear_display_map(cfg)
 
@@ -530,6 +539,7 @@ def resync_activity(cfg, activity_id):
         "old_bike_name": fetch_gear_display_map(cfg).get(old_gear_id) if old_gear_id else None,
         "new_bike_name": fetch_gear_display_map(cfg).get(new_gear_id) if new_gear_id else None,
         "warnings": warnings,
+        "narrative_inspection_succeeded": narrative_persisted,
         "elapsed_seconds": round(time.monotonic() - started_at, 3),
     }
 
@@ -543,7 +553,7 @@ def preview_resync(cfg, activity_id):
 
     token = refresh_access_token(cfg)
     access_token = token["access_token"]
-    refreshed = fetch_activity_detail_row(access_token, activity_id)
+    _, refreshed = fetch_activity_detail_row(access_token, activity_id)
 
     gear_display_map = fetch_gear_display_map(cfg)
     old_row = {**existing}

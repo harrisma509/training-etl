@@ -27,6 +27,8 @@ It is not a general-purpose ingestion path and should not be treated as a replac
 
 The ETL remains the owner of this workflow; the separate `training-web` repository does not participate in the actual resync logic.
 
+The web dashboard may enqueue one `activity_resync` request per canonical activity for a selected local date. The sync worker dispatches those rows to this same single-activity entry point, preserving the existing active-request uniqueness rule. The web layer owns only date lookup, queue orchestration, confirmation, and status presentation; it does not call Strava or duplicate resync logic.
+
 ## CLI contract
 
 Run the CLI from the repo root:
