@@ -9,7 +9,7 @@ RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 MASTER_LOG="${LOG_DIR}/strava_narrative_max_daily_${RUN_ID}.log"
 STATUS_FILE="${LOG_DIR}/strava_narrative_max_daily_${RUN_ID}.status"
 
-PLANNED_BATCHES=12
+PLANNED_BATCHES=4
 BATCH_SIZE=150
 SLEEP_SECONDS=960
 DAILY_HEADROOM=200
