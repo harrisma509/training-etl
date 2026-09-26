@@ -1367,6 +1367,7 @@ CREATE TABLE public.coach_turn (
 	cached_input_tokens int8 NULL,
 	output_tokens int8 NULL,
 	reasoning_tokens int8 NULL,
+	reasoning_effort_requested text NULL,
 	total_tokens int8 NULL,
 	estimated_cost_usd numeric(12, 6) NULL, -- Locally estimated API cost for the complete turn; provider billing remains authoritative.
 	effective_context_tokens int8 NULL, -- Tokens estimated or reported for the effective request context, not cumulative session history.
@@ -1398,6 +1399,7 @@ CREATE TABLE public.coach_turn (
 	CONSTRAINT coach_turn_provider_not_blank CHECK (((provider IS NULL) OR (btrim(provider) <> ''::text))),
 	CONSTRAINT coach_turn_provider_response_not_blank CHECK (((provider_response_id IS NULL) OR (btrim(provider_response_id) <> ''::text))),
 	CONSTRAINT coach_turn_reasoning_tokens_check CHECK (((reasoning_tokens IS NULL) OR (reasoning_tokens >= 0))),
+	CONSTRAINT coach_turn_reasoning_effort_requested_check CHECK (((reasoning_effort_requested IS NULL) OR (reasoning_effort_requested = ANY (ARRAY['none'::text, 'low'::text, 'medium'::text, 'high'::text])))),
 	CONSTRAINT coach_turn_request_id_not_blank CHECK ((btrim(request_id) <> ''::text)),
 	CONSTRAINT coach_turn_request_id_not_null NOT NULL request_id,
 	CONSTRAINT coach_turn_request_id_unique UNIQUE (request_id),
@@ -1419,6 +1421,7 @@ COMMENT ON TABLE public.coach_turn IS 'One complete user-to-Coach orchestration 
 COMMENT ON COLUMN public.coach_turn.estimated_cost_usd IS 'Locally estimated API cost for the complete turn; provider billing remains authoritative.';
 COMMENT ON COLUMN public.coach_turn.effective_context_tokens IS 'Tokens estimated or reported for the effective request context, not cumulative session history.';
 COMMENT ON COLUMN public.coach_turn.error_category IS 'Sanitized failure category only; excludes stack traces, credentials, provider payloads, SQL, and environment values.';
+COMMENT ON COLUMN public.coach_turn.reasoning_effort_requested IS 'Validated reasoning effort requested from the provider for this turn; NULL means unavailable for historical turns.';
 
 
 -- public.ai_coach_turn_context_receipts foreign keys
