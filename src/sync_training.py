@@ -104,7 +104,7 @@ def main():
     access_token = token["access_token"]
 
     activities = fetch_activities(access_token, cfg["DAYS_BACK"])
-    rows = [normalize_activity(activity) for activity in activities]
+    rows = [normalize_activity(activity, summary_observed=True) for activity in activities]
 
     new_activity_ids = []
     if cfg.get("WRITE_DB"):

@@ -7,7 +7,11 @@ from datetime import datetime, timedelta, timezone
 import psycopg
 from psycopg.rows import dict_row
 
-from activity_utils import extract_activity_narrative, normalize_activity
+from activity_utils import (
+    STRUCTURED_ACTIVITY_FIELDS,
+    extract_activity_narrative,
+    normalize_activity,
+)
 from daily_builder import build_daily_training
 from db_writer import (
     db_activity_to_row,
@@ -99,6 +103,28 @@ def fetch_existing_activity(cfg, activity_id):
                     max_hr,
                     gear_id,
                     bike_name,
+                    start_at_utc,
+                    start_at_local,
+                    timezone,
+                    utc_offset_seconds,
+                    manual,
+                    trainer,
+                    commute,
+                    private,
+                    flagged,
+                    workout_type,
+                    device_name,
+                    average_speed_mps,
+                    max_speed_mps,
+                    average_cadence,
+                    average_watts,
+                    weighted_average_watts,
+                    max_watts,
+                    kilojoules,
+                    device_watts,
+                    relative_effort,
+                    elevation_high_m,
+                    elevation_low_m,
                     raw_json
                 FROM strava_activities
                 WHERE activity_id = %s
@@ -123,6 +149,7 @@ def fetch_existing_activity(cfg, activity_id):
                 "max_hr": row["max_hr"],
                 "gear_id": row["gear_id"],
                 "bike_name": row["bike_name"],
+                **{field: row.get(field) for field in STRUCTURED_ACTIVITY_FIELDS.values()},
             }
 
 
@@ -168,6 +195,11 @@ def compare_activity_change(old_row, new_row, gear_display_map):
         "hr_summary": {"old": {"average_hr": old_row.get("average_hr") if old_row else None, "max_hr": old_row.get("max_hr") if old_row else None}, "new": {"average_hr": new_row.get("average_hr") if new_row else None, "max_hr": new_row.get("max_hr") if new_row else None}},
         "gear_id": {"old": old_gear, "new": new_gear},
         "bike_name": {"old": old_bike, "new": new_bike},
+        **{
+            field: {"old": old_row.get(field) if old_row else None, "new": new_row.get(field)}
+            for field in STRUCTURED_ACTIVITY_FIELDS.values()
+            if field in new_row
+        },
     }
 
 
@@ -260,6 +292,10 @@ def classify_changed_fields(old_row, new_row):
             if normalize_compare_value(old_value) != normalize_compare_value(new_value):
                 changed.append(field)
 
+    for field in STRUCTURED_ACTIVITY_FIELDS.values():
+        if field in new_row and normalize_compare_value(old_row.get(field)) != normalize_compare_value(new_row[field]):
+            changed.append(field)
+
     return changed
 
 
@@ -300,6 +336,28 @@ def fetch_existing_activity_tx(cur, activity_id):
             max_hr,
             gear_id,
             bike_name,
+            start_at_utc,
+            start_at_local,
+            timezone,
+            utc_offset_seconds,
+            manual,
+            trainer,
+            commute,
+            private,
+            flagged,
+            workout_type,
+            device_name,
+            average_speed_mps,
+            max_speed_mps,
+            average_cadence,
+            average_watts,
+            weighted_average_watts,
+            max_watts,
+            kilojoules,
+            device_watts,
+            relative_effort,
+            elevation_high_m,
+            elevation_low_m,
             raw_json
         FROM strava_activities
         WHERE activity_id = %s
@@ -324,13 +382,28 @@ def fetch_existing_activity_tx(cur, activity_id):
         "max_hr": row["max_hr"],
         "gear_id": row["gear_id"],
         "bike_name": row["bike_name"],
+        **{field: row.get(field) for field in STRUCTURED_ACTIVITY_FIELDS.values()},
     }
 
 
 def fetch_date_activity_rows(cur, date_text):
     cur.execute(
         """
-        SELECT *
+        SELECT
+            activity_id,
+            date_local,
+            name,
+            sport_type,
+            activity_category,
+            moving_sec,
+            elapsed_sec,
+            distance_mi,
+            elevation_ft,
+            has_heartrate,
+            average_hr,
+            max_hr,
+            gear_id,
+            bike_name
         FROM strava_activities
         WHERE date_local = %s
         ORDER BY activity_id
@@ -426,7 +499,12 @@ def resync_activity(cfg, activity_id):
                 new_gear_id = refreshed.get("gear_id")
 
                 changed_fields = classify_changed_fields(existing, refreshed)
-                daily_rebuilt = bool(changed_fields)
+                daily_rebuild_fields = {
+                    "date_local", "name", "sport_type", "activity_category",
+                    "moving_sec", "elapsed_sec", "distance_mi", "elevation_ft",
+                    "has_heartrate", "average_hr", "max_hr", "gear_id",
+                }
+                daily_rebuilt = any(field in daily_rebuild_fields for field in changed_fields)
                 weekly_rebuilt, weekly_skip_reason = classify_weekly_rebuild(changed_fields)
                 rebuilt_dates = []
                 deleted_daily_dates = []
@@ -501,10 +579,7 @@ def resync_activity(cfg, activity_id):
                             if warning:
                                 warnings.append(warning)
 
-                fitness_fatigue_rebuilt = bool(changed_fields) and any(
-                    field not in {"name", "gear_id"}
-                    for field in changed_fields
-                )
+                fitness_fatigue_rebuilt = weekly_rebuilt
                 if fitness_fatigue_rebuilt:
                     rebuild_fitness_fatigue(cur)
 

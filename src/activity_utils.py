@@ -1,4 +1,6 @@
+import math
 from collections.abc import Mapping
+from datetime import datetime, timezone
 
 from constants import M_PER_MI, M_TO_FT
 
@@ -12,6 +14,42 @@ NARRATIVE_STATES = frozenset({
     "nonempty",
     "malformed",
 })
+
+STRUCTURED_ACTIVITY_FIELDS = {
+    "start_date": "start_at_utc",
+    "start_date_local": "start_at_local",
+    "timezone": "timezone",
+    "utc_offset": "utc_offset_seconds",
+    "manual": "manual",
+    "trainer": "trainer",
+    "commute": "commute",
+    "private": "private",
+    "flagged": "flagged",
+    "workout_type": "workout_type",
+    "device_name": "device_name",
+    "average_speed": "average_speed_mps",
+    "max_speed": "max_speed_mps",
+    "average_cadence": "average_cadence",
+    "average_watts": "average_watts",
+    "weighted_average_watts": "weighted_average_watts",
+    "max_watts": "max_watts",
+    "kilojoules": "kilojoules",
+    "device_watts": "device_watts",
+    "suffer_score": "relative_effort",
+    "elev_high": "elevation_high_m",
+    "elev_low": "elevation_low_m",
+}
+STRUCTURED_ACTIVITY_BOOL_FIELDS = frozenset({
+    "manual", "trainer", "commute", "private", "flagged", "device_watts",
+})
+STRUCTURED_ACTIVITY_INT_FIELDS = frozenset({
+    "utc_offset", "workout_type", "max_watts", "suffer_score",
+})
+STRUCTURED_ACTIVITY_FLOAT_FIELDS = frozenset({
+    "average_speed", "max_speed", "average_cadence", "average_watts",
+    "weighted_average_watts", "kilojoules", "elev_high", "elev_low",
+})
+MAX_UTC_OFFSET_SECONDS = 14 * 60 * 60
 
 
 def _narrative_field_patch(activity, field_name):
@@ -83,13 +121,23 @@ def extract_activity_narrative(activity):
     })
 
 
+def _coerce_integral_number(value, source_field):
+    if isinstance(value, bool):
+        raise ValueError(f"{source_field} must be an integer")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return int(value)
+    raise ValueError(f"{source_field} must be an integer")
+
+
 def activity_local_date(activity):
-    value = activity.get("start_date_local") or activity.get("start_date")
+    value = activity.get("date_local") or activity.get("start_date_local") or activity.get("start_date")
 
     if not value:
         return "unknown"
 
-    return value[:10]
+    return str(value)[:10]
 
 
 def clean_activity_name(name):
@@ -178,7 +226,48 @@ def classify_activity(activity):
     return "other"
 
 
-def normalize_activity(activity):
+def _structured_value(activity, source_field):
+    value = activity[source_field]
+    if value is None:
+        return None
+    if source_field == "start_date":
+        if not isinstance(value, str):
+            raise ValueError("start_date must be an ISO timestamp")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("start_date must be an ISO timestamp") from exc
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("start_date must include a UTC offset")
+        return parsed.astimezone(timezone.utc)
+    if source_field == "start_date_local":
+        if not isinstance(value, str):
+            raise ValueError("start_date_local must be an ISO timestamp")
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError as exc:
+            raise ValueError("start_date_local must be an ISO timestamp") from exc
+    if source_field in {"timezone", "device_name"}:
+        if not isinstance(value, str):
+            raise ValueError(f"{source_field} must be text")
+        return value
+    if source_field in STRUCTURED_ACTIVITY_BOOL_FIELDS:
+        if not isinstance(value, bool):
+            raise ValueError(f"{source_field} must be boolean")
+        return value
+    if source_field in STRUCTURED_ACTIVITY_INT_FIELDS:
+        value = _coerce_integral_number(value, source_field)
+        if source_field == "utc_offset" and abs(value) > MAX_UTC_OFFSET_SECONDS:
+            raise ValueError("utc_offset is out of range")
+        return value
+    if source_field in STRUCTURED_ACTIVITY_FLOAT_FIELDS:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError(f"{source_field} must be a finite number")
+        return float(value)
+    raise ValueError("structured activity field is not allowlisted")
+
+
+def normalize_activity(activity, summary_observed=False):
     moving_sec = int(activity.get("moving_time") or 0)
     elapsed_sec = int(activity.get("elapsed_time") or 0)
 
@@ -206,6 +295,18 @@ def normalize_activity(activity):
     }
 
     row["activity_category"] = classify_activity(row)
+
+    for source_field, target_field in STRUCTURED_ACTIVITY_FIELDS.items():
+        if source_field in activity:
+            row[target_field] = _structured_value(activity, source_field)
+
+    start_at_local = row.get("start_at_local")
+    if start_at_local is not None and row["date_local"] != "unknown":
+        if start_at_local.date().isoformat() != row["date_local"]:
+            raise ValueError("start_date_local does not match date_local")
+
+    if summary_observed:
+        row["_summary_activity_observed"] = True
 
     return row
 

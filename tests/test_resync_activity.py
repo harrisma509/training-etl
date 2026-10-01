@@ -9,7 +9,12 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import resync_activity
-from resync_activity import compute_rebuild_plan, week_start_for_date
+from resync_activity import (
+    classify_changed_fields,
+    classify_weekly_rebuild,
+    compute_rebuild_plan,
+    week_start_for_date,
+)
 
 
 class ResyncActivityTests(unittest.TestCase):
@@ -114,6 +119,31 @@ class ResyncActivityTests(unittest.TestCase):
         self.assertFalse(result["daily_rebuilt"])
         self.assertFalse(result["weekly_rebuilt"])
         self.assertTrue(connection.committed)
+
+    def test_structured_field_only_change_is_metadata_only(self):
+        old_row = {
+            "date_local": "2024-04-03",
+            "name": "Same",
+            "sport_type": "Walk",
+            "activity_category": "walk",
+            "moving_sec": 100,
+            "elapsed_sec": 100,
+            "distance_mi": 1.0,
+            "elevation_ft": 10.0,
+            "has_heartrate": False,
+            "average_hr": None,
+            "max_hr": None,
+            "gear_id": None,
+            "device_name": "Old Device",
+        }
+        new_row = {**old_row, "device_name": "New Device"}
+
+        changed_fields = classify_changed_fields(old_row, new_row)
+        weekly_rebuilt, reason = classify_weekly_rebuild(changed_fields)
+
+        self.assertEqual(changed_fields, ["device_name"])
+        self.assertFalse(weekly_rebuilt)
+        self.assertEqual(reason, "gear-only or metadata-only change")
 
 
 if __name__ == "__main__":

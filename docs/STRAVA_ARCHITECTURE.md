@@ -34,6 +34,16 @@ The canonical writer performs activity upserts and derived rebuild work on one d
 
 The current normalizer retains standard activity identity, date, name, sport, duration, distance, elevation, heart-rate, gear, and classification fields. The list endpoint supplies SummaryActivity, so normal sync performs one bounded detail request for each genuinely new activity after structured persistence; known activities receive no repeated detail request. The detail response supplies the allowlisted narrative fields, which are persisted through the separate omission-safe narrative writer. A detail or narrative failure is isolated from structured ingestion and does not stop later new-activity enrichment. The `raw_json` column stores JSON serialized from the normalized activity dictionary; it is not the provider-original response and is not a narrative contract.
 
+### Structured Activity Data Contract
+
+The Structured Activity Data Contract is implemented in this branch as future-ingestion support only. Its manual additive SQL artifact is `sql/strava_activity_structured_data_v1.sql`; it is not applied by the ETL, and historical rows remain null until a separately approved backfill. The matching rollback is destructive and exists at `sql/strava_activity_structured_data_v1_rollback.sql`.
+
+The nullable contract stores approved SummaryActivity and DetailedActivity fields only: UTC and local starts, timezone and offset; manual/trainer/commute/private/flagged/workout attributes; device name; speed, cadence, power, effort, and elevation-high/low measurements; and `summary_observed_at`. Normal list sync marks an accepted SummaryActivity observation; targeted detail resync does not advance that timestamp. For every new field, provider-key omission preserves the stored value while an explicit provider `null` clears it. Zero and `false` remain values, not omission.
+
+`start_at_utc` is normalized to an aware UTC timestamp. `start_at_local` preserves wall-clock fields as a timezone-free timestamp and must agree with the canonical local date when that date is supplied. New values are strictly type-checked and malformed data fails before a database write. `raw_json` remains a JSON-safe normalized local dictionary, excludes internal observation markers, and is not a raw provider payload or a persistence fallback. Structured-only targeted resync changes are metadata-only and do not rebuild Daily, Weekly, or fitness/fatigue data. Narrative columns and narrative observation semantics remain isolated from this contract.
+
+Official Strava activity and rate-limit documentation was reviewed on 2026-09-30. The approved fields are documented on SummaryActivity and/or DetailedActivity; `suffer_score` maps to `relative_effort`. `summary_resource_state`, external/upload IDs, stop timestamps, location/map/polyline/weather data, calories, and device temperature are intentionally excluded. No indexes are added by this contract.
+
 ### Current application limits
 
 The current Strava application limits are:
