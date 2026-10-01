@@ -42,6 +42,23 @@ The nullable contract stores approved SummaryActivity and DetailedActivity field
 
 `start_at_utc` is normalized to an aware UTC timestamp. `start_at_local` preserves wall-clock fields as a timezone-free timestamp and must agree with the canonical local date when that date is supplied. New values are strictly type-checked and malformed data fails before a database write. `raw_json` remains a JSON-safe normalized local dictionary, excludes internal observation markers, and is not a raw provider payload or a persistence fallback. Structured-only targeted resync changes are metadata-only and do not rebuild Daily, Weekly, or fitness/fatigue data. Narrative columns and narrative observation semantics remain isolated from this contract.
 
+`src/strava_structured_data_backfill.py` is the historical SummaryActivity backfill utility. Preview is local-only and reports scope, observed/unobserved coverage, local date range, and an estimated page count without a token refresh, Strava call, or write:
+
+```text
+python /app/strava_structured_data_backfill.py --preview
+```
+
+Apply captures one fixed `before` epoch at run start, uses the default lower boundary `2012-01-01`, requests `/athlete/activities` with `after`, `before`, `page`, and `per_page=200`, and processes one page per bounded database transaction. A one-page pilot and a full replay are:
+
+```text
+python /app/strava_structured_data_backfill.py --apply --max-pages 1
+python /app/strava_structured_data_backfill.py --apply
+```
+
+The apply path acquires a non-blocking session advisory lock before token refresh or provider calls. It matches provider rows to existing local `activity_id` values, normalizes with `summary_observed=True`, and updates only the approved structured columns plus `summary_observed_at`. Provider-only rows are skipped, local-only rows are never deleted or cleared, malformed rows do not advance observation, and replay is safe. Empty or short pages stop traversal; HTTP 429 stops immediately. Read-specific rate headers are preferred, with overall headers as the safe fallback. JSON Lines output contains counts, outcomes, safe numeric rate metadata, boundaries, and reconciliation only; it excludes names, narrative, raw payloads, routes, coordinates, SQL, and credentials. No DetailedActivity request is made, and no Daily, Weekly, Load, TID, Fitness, Fatigue, Form, audit, yearly, recovery, gear, or narrative rebuild runs.
+
+This utility was implemented but not executed. Operators must review preview output, pilot coverage, sanitized logs, and post-run coverage/timezone queries before a full apply. Official Strava activity and rate-limit documentation was rechecked on 2026-09-30: `/athlete/activities` supports `before`, `after`, `page`, and `per_page`; SummaryActivity contains the approved activity fields; `X-RateLimit-*` and `X-ReadRateLimit-*` headers report 15-minute and daily usage; and requests over a limit return HTTP 429.
+
 Official Strava activity and rate-limit documentation was reviewed on 2026-09-30. The approved fields are documented on SummaryActivity and/or DetailedActivity; `suffer_score` maps to `relative_effort`. `summary_resource_state`, external/upload IDs, stop timestamps, location/map/polyline/weather data, calories, and device temperature are intentionally excluded. No indexes are added by this contract.
 
 ### Current application limits

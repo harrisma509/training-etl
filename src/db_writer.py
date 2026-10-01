@@ -684,6 +684,50 @@ def upsert_strava_activities(cur, activities):
         cur.execute(sql, params)
 
 
+def update_structured_activity_data(cur, activities):
+    sql = """
+        UPDATE public.strava_activities
+        SET
+            start_at_utc = CASE WHEN %(start_at_utc_observed)s THEN %(start_at_utc)s ELSE start_at_utc END,
+            start_at_local = CASE WHEN %(start_at_local_observed)s THEN %(start_at_local)s ELSE start_at_local END,
+            timezone = CASE WHEN %(timezone_observed)s THEN %(timezone)s ELSE timezone END,
+            utc_offset_seconds = CASE WHEN %(utc_offset_seconds_observed)s THEN %(utc_offset_seconds)s ELSE utc_offset_seconds END,
+            manual = CASE WHEN %(manual_observed)s THEN %(manual)s ELSE manual END,
+            trainer = CASE WHEN %(trainer_observed)s THEN %(trainer)s ELSE trainer END,
+            commute = CASE WHEN %(commute_observed)s THEN %(commute)s ELSE commute END,
+            private = CASE WHEN %(private_observed)s THEN %(private)s ELSE private END,
+            flagged = CASE WHEN %(flagged_observed)s THEN %(flagged)s ELSE flagged END,
+            workout_type = CASE WHEN %(workout_type_observed)s THEN %(workout_type)s ELSE workout_type END,
+            device_name = CASE WHEN %(device_name_observed)s THEN %(device_name)s ELSE device_name END,
+            average_speed_mps = CASE WHEN %(average_speed_mps_observed)s THEN %(average_speed_mps)s ELSE average_speed_mps END,
+            max_speed_mps = CASE WHEN %(max_speed_mps_observed)s THEN %(max_speed_mps)s ELSE max_speed_mps END,
+            average_cadence = CASE WHEN %(average_cadence_observed)s THEN %(average_cadence)s ELSE average_cadence END,
+            average_watts = CASE WHEN %(average_watts_observed)s THEN %(average_watts)s ELSE average_watts END,
+            weighted_average_watts = CASE WHEN %(weighted_average_watts_observed)s THEN %(weighted_average_watts)s ELSE weighted_average_watts END,
+            max_watts = CASE WHEN %(max_watts_observed)s THEN %(max_watts)s ELSE max_watts END,
+            kilojoules = CASE WHEN %(kilojoules_observed)s THEN %(kilojoules)s ELSE kilojoules END,
+            device_watts = CASE WHEN %(device_watts_observed)s THEN %(device_watts)s ELSE device_watts END,
+            relative_effort = CASE WHEN %(relative_effort_observed)s THEN %(relative_effort)s ELSE relative_effort END,
+            elevation_high_m = CASE WHEN %(elevation_high_m_observed)s THEN %(elevation_high_m)s ELSE elevation_high_m END,
+            elevation_low_m = CASE WHEN %(elevation_low_m_observed)s THEN %(elevation_low_m)s ELSE elevation_low_m END,
+            summary_observed_at = CASE WHEN %(summary_activity_observed)s THEN now() ELSE summary_observed_at END
+        WHERE activity_id = %(activity_id)s
+    """
+
+    updated = 0
+    for activity in activities:
+        params = {
+            "activity_id": activity.get("id"),
+            "summary_activity_observed": bool(activity.get("_summary_activity_observed")),
+        }
+        for target_field in STRUCTURED_ACTIVITY_FIELDS.values():
+            params[target_field] = activity.get(target_field)
+            params[f"{target_field}_observed"] = target_field in activity
+        cur.execute(sql, params)
+        updated += cur.rowcount
+    return updated
+
+
 class ActivityNarrativeActivityNotFound(Exception):
     pass
 

@@ -123,6 +123,17 @@ def fetch_activities(access_token, days_back):
     return all_activities
 
 
+def fetch_activity_page_with_metadata(access_token, before, after, page=1, per_page=200):
+    query = urlencode({
+        "after": after,
+        "before": before,
+        "page": page,
+        "per_page": per_page,
+    })
+    url = f"{STRAVA_API_BASE}/athlete/activities?{query}"
+    return http_json_with_metadata("GET", url, headers=auth_header(access_token))
+
+
 def fetch_activity_detail(access_token, activity_id):
     detail, _ = fetch_activity_detail_with_metadata(access_token, activity_id)
     return detail
