@@ -21,27 +21,28 @@ The separate `training-web` repo owns the FastAPI web app, dashboard routes, bro
 ## Repo Boundary
 
 This repo owns:
-
-- Strava ingestion
-- Training data builders
-- Daily and weekly summary generation
-- Database writes
-- Gear database helpers
-- Weekly audit computation
-- Schema/reference SQL
-- Future Service_Log import
-- Future service status builders
+- External-source ingestion, including Strava
+- OAuth and provider credentials for ETL-owned sources
+- Normalization and authoritative field semantics
+- ETL-managed writes
+- Schema SQL, migrations, and schema evolution
+- Daily, Weekly, Load, TID, Fitness, Fatigue, Form, Weekly Audit, and other authoritative calculations
+- Historical imports, backfills, rebuilds, reconciliation, and repair logic
+- Queue processing and operational ETL scripts
+- Implementation and deployment artifacts for `training-runner` and `training-api`
 
 The separate `training-web` repo owns:
-
-- FastAPI routes
-- Browser dashboard UI
-- Static JavaScript and CSS
-- Web Docker runtime
-- NAS web app deployment
+- The browser-facing FastAPI application and browser-facing routes
+- Dashboard, Search, reporting, narrative, export, and presentation workflows
+- Bounded server-side read-only PostgreSQL queries over processed data
+- Web-owned application records
+- Coach persistence, orchestration, settings, memories, receipts, and AI-provider integration
 
 Do not modify `training-web` files from this repo unless explicitly requested.
 
+The accepted cross-repository and runtime boundary is documented in `docs/ARD/TRAINING_SYSTEM_SERVICE_BOUNDARIES.md`. Read it for work involving database access, internal APIs, Search/reporting, service placement, or cross-service orchestration.
+
+`training-runner` is the asynchronous and scheduled ETL service. It executes scheduled sync, queue-driven work, background ETL, and explicitly invoked backfills or rebuilds. `training-api` is the narrow authenticated synchronous facade over approved ETL functions and coordinated ETL-owned contracts; it is not a universal query layer or the mandatory path for ordinary `training-web` reads.
 ## Runtime
 
 - ETL runs separately from the web app.

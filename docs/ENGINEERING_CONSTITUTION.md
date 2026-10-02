@@ -18,6 +18,8 @@ Before planning, investigating, editing, testing, or deploying a change, read th
 4. The repository-local `docs/TESTING_GUIDE.md`.
 5. The current schema, API contract, or operational runbook when the task touches those areas.
 
+For work involving repository ownership, container or service placement, database access, internal APIs, Search/reporting, ETL orchestration, or cross-service behavior, also read `training-etl/docs/ARD/TRAINING_SYSTEM_SERVICE_BOUNDARIES.md`.
+
 ### Canonical repository documents
 
 #### `training-etl`
@@ -25,6 +27,7 @@ Before planning, investigating, editing, testing, or deploying a change, read th
 - `training-etl/.github/copilot-instructions.md`: repository ownership, schema safety, ETL rules, and coding-agent constraints.
 - `training-etl/docs/TESTING_GUIDE.md`: exact test workflow, isolation requirements, and completion reporting.
 - `training-etl/docs/TRAINING_API.md`: Training API architecture, authentication, context contract, deployment behavior, and API operations.
+- `training-etl/docs/ARD/TRAINING_SYSTEM_SERVICE_BOUNDARIES.md`: accepted cross-repository and runtime service boundaries.
 - `training-etl/docs/targeted_activity_resync.md`: single-activity correction workflow and affected-date rebuild behavior.
 - `training-etl/docs/logging_and_logrotate.md`: persistent-log ownership, rotation, validation, and append checks.
 - `training-etl/README.md`: current runtime, operations, monitoring, backup, restore, and service deployment model.
@@ -35,11 +38,9 @@ Before planning, investigating, editing, testing, or deploying a change, read th
 - `training-web/.github/copilot-instructions.md`: web ownership, frontend rules, safety, deployment, and validation expectations.
 - `training-web/docs/TESTING_GUIDE.md`: exact web test workflow, JavaScript boundary, isolation, and completion reporting.
 - `training-web/docs/AI_DEV_GUIDE.md`: web-layer development workflow, database policy, error handling, and deployment principles.
-- `training-web/docs/AI_COACH.md`: authoritative AI Coach architecture, request lifecycle, policy, limits, privacy, and roadmap.
-- `training-web/docs/AI_COACH_CONTEXT_RECEIPT_DESIGN.md`: receipt purpose, schema, immutability, allowlist, and excluded content.
-- `training-web/docs/AI_COACH_CUSTOM_INSTRUCTIONS_DESIGN.md`: Custom Instructions ownership, validation, compilation, and authority limits.
-- `training-web/docs/AI_COACH_DURABLE_MEMORIES_DESIGN.md`: Durable Memory schema, eligibility, routing, limits, and precedence.
-- `training-web/docs/AI_COACH_SETTINGS_DESIGN.md`: persisted Coach settings, validation, and orchestration integration.
+- `training-web/docs/AI_COACH.md`: sole global current Coach contract for shared behavior, request lifecycle, policy, limits, privacy, and roadmap.
+- `training-web/docs/AI_COACH_CONTEXT_RECEIPTS.md`: focused current Context Receipt shape, immutability, allowlist, and compatibility contract.
+- `training-web/docs/AI_COACH_PERSONALIZATION.md`: focused current Custom Instructions and Durable Memories contract.
 - `training-web/docs/COMPONENTS_SERVICE_API.md`: service-event contracts, historical snapshots, two-clock semantics, and Components UI adoption.
 - `training-web/docs/FRONTEND_REFACTOR_HANDOFF.md`: current vanilla-JavaScript ownership model and safe refactor sequence.
 - `training-web/README.md`: web-layer purpose, runtime, deployment, and repository boundary.
@@ -140,29 +141,29 @@ Maximum feature count is not the objective.
 
 ### 4.1 `training-etl`
 
-`training-etl` owns ingestion, normalization, authoritative training calculations, database writes for ETL-managed data, schema artifacts, Daily and Weekly builders, Weekly Audit, and the implementation of `training-api`.
+The `training-etl` repository owns external-source ingestion, normalization, authoritative field semantics, ETL-managed writes, schema SQL and evolution, Daily and Weekly builders, Load/TID/Fitness/Fatigue/Form, Weekly Audit, historical imports and repairs, sync queue behavior, and the implementation and deployment artifacts for `training-runner` and `training-api`.
 
-The exact boundary is defined in `training-etl/.github/copilot-instructions.md`, `training-etl/README.md`, and `training-etl/docs/TRAINING_API.md`.
+It does not own browser presentation, ordinary dashboard UI routes, Coach conversation persistence, or browser-facing product workflows. The exact cross-service boundary is defined in `training-etl/docs/ARD/TRAINING_SYSTEM_SERVICE_BOUNDARIES.md`.
 
 ### 4.2 `training-api`
 
-`training-api` is the narrow authenticated boundary over authoritative Training Intelligence data and approved ETL operations.
+`training-api` is the narrow authenticated synchronous facade over explicitly approved ETL functions and coordinated ETL-owned contracts. It is not the mandatory path for every PostgreSQL read.
 
-It validates, queries, shapes, serializes, bounds, and authorizes. It must not become an arbitrary SQL surface, AI-provider client, or duplicate calculation engine.
+It may coordinate a time-aligned Coach context or expose a synchronous ETL operation such as activity resync. It must not become an arbitrary SQL surface, universal data layer, AI-provider client, Coach persistence owner, or duplicate calculation engine.
 
 Use `training-etl/docs/TRAINING_API.md` for the current endpoint, authentication, response, deployment, and operational contracts.
 
 ### 4.3 `training-web`
 
-`training-web` owns the FastAPI browser application, dashboard presentation, static frontend, application-managed CRUD where assigned, Coach persistence and orchestration, settings, memories, receipts, and provider integration.
+`training-web` owns the FastAPI browser application and browser-facing routes, dashboard/Search/reporting presentation, bounded parameterized server-side read-only PostgreSQL queries over processed data, approved exports, web-owned CRUD, Coach persistence and orchestration, settings, memories, receipts, and provider integration.
 
-It must not duplicate ETL calculations or silently redefine schema semantics.
+It may read processed PostgreSQL data directly for ordinary product workflows. It must not ingest ETL-owned external sources, receive Strava credentials, duplicate ETL calculations, or silently redefine schema semantics.
 
 Use `training-web/.github/copilot-instructions.md`, `training-web/docs/AI_DEV_GUIDE.md`, and `training-web/README.md` for current rules.
 
 ### 4.4 PostgreSQL and AI providers
 
-PostgreSQL is the durable system of record.
+PostgreSQL is the shared durable system of record. Schema ownership and read access are separate: `training-etl` owns schema meaning and evolution, while `training-web` may perform bounded server-side reads over processed data and `training-api` serves only approved internal contracts.
 
 AI providers perform bounded inference only. AI providers do not own authoritative data, durable conversation history, product policy, or user-managed memory.
 
@@ -206,7 +207,11 @@ Use `training-web/docs/COMPONENTS_SERVICE_API.md` as the authoritative detailed 
 - Daily Check-ins and current narrative represent current direct reports.
 - Training Intelligence remains authoritative for measured and calculated facts.
 
-Use the dedicated AI Coach design documents for exact schemas, limits, routing, and compilation order.
+`training-web/docs/AI_COACH.md` is the authoritative current Coach contract.
+`training-web/docs/AI_COACH_PERSONALIZATION.md` and
+`training-web/docs/AI_COACH_CONTEXT_RECEIPTS.md` are focused current component
+contracts. Coach design records under `training-web/docs/archive/coach/` are
+historical and non-authoritative.
 
 ---
 
@@ -260,7 +265,7 @@ A process can complete successfully while producing plausible but incomplete dat
 
 ## 7. AI Coach Constitutional Rules
 
-The detailed implementation contract lives in `training-web/docs/AI_COACH.md` and its supporting design documents. The following rules are cross-cutting and stable.
+The shared current contract lives in `training-web/docs/AI_COACH.md`; focused current contracts define receipts and personalization without redefining global behavior. The following rules are cross-cutting and stable.
 
 ### 7.1 The current question is primary
 
@@ -282,7 +287,7 @@ No report of pain, injury, stress, sleep, readiness, or equipment state does not
 
 Add context only when it improves a documented coaching decision. Standard context ceilings are safety guards, not targets.
 
-Context Receipts are immutable, bounded, and allowlisted. Use `training-web/docs/AI_COACH_CONTEXT_RECEIPT_DESIGN.md` for the exact receipt contract.
+Context Receipts are immutable, bounded, and allowlisted. Use `training-web/docs/AI_COACH_CONTEXT_RECEIPTS.md` for the focused receipt contract.
 
 ### 7.6 Safety outranks optimization
 
@@ -294,11 +299,11 @@ Coach may interpret data and recommend conservative action, but must not diagnos
 
 Saving, viewing, editing, deleting, searching, exporting, syncing, or managing settings must not trigger a provider call unless that workflow has been explicitly approved as AI-powered.
 
-Provider requests remain subject to the controls documented in `training-web/docs/AI_COACH.md` and `training-web/docs/AI_COACH_SETTINGS_DESIGN.md`.
+Provider requests remain subject to the controls documented in `training-web/docs/AI_COACH.md`.
 
 ### 7.8 Conversation modes change lens, not truth
 
-Future conversation templates may alter framing, response strategy, context emphasis, or memory weighting. They must not change authoritative data, safety policy, cost controls, privacy boundaries, or clinician-priority rules.
+Conversation modes may alter framing, response strategy, context emphasis, or memory weighting. They must not change authoritative data, safety policy, cost controls, privacy boundaries, or clinician-priority rules.
 
 ### 7.9 Coaching supports practice, not only milestones
 

@@ -10,9 +10,9 @@ Repository source and the current official Strava developer documentation take p
 
 `training-etl` owns Strava ingestion, OAuth token refresh, activity normalization, ETL-managed PostgreSQL writes, schema SQL, Daily and Weekly rebuilds, targeted activity resync, and the authenticated Training API boundary.
 
-`training-web` owns FastAPI browser routes, dashboard presentation, static frontend behavior, Coach orchestration and provider integration, Coach receipts, and web-owned search or export presentation. It consumes approved Training API or database-backed contracts and does not own Strava ingestion or ETL calculations.
+`training-web` owns FastAPI browser-facing routes, dashboard/Search/reporting presentation, static frontend behavior, Coach orchestration and provider integration, Coach receipts, and web-owned search or export presentation. It may perform bounded, parameterized, server-side read-only PostgreSQL queries over processed data for ordinary product workflows. It consumes the approved Training API only for coordinated or ETL-operation contracts and does not own Strava ingestion or ETL calculations.
 
-PostgreSQL is the durable system of record. `strava_activities` is the authoritative activity-level source for Training Intelligence. Ingestion and persistence are separate from API exposure, UI display, search, export, and Coach context. Current consumers do not receive activity narrative through a default contract.
+PostgreSQL is the durable system of record. `strava_activities` is the authoritative activity-level source for Training Intelligence. Ingestion and persistence are separate from API exposure, UI display, search, export, and Coach context. Narrative is not part of a default context contract; for Coach turns, `training-web` hydrates only activity IDs selected by authoritative context, as described in `training-web/docs/AI_COACH.md`.
 
 ## Authentication and token lifecycle
 
@@ -80,14 +80,15 @@ flowchart LR
     S -->|detailed activity for resync/calculations| E
     E --> N[normalize_activity]
     N --> P[(PostgreSQL)]
-    P --> A[Training API / internal API]
-    A --> W[training-web]
-    W --> C[Dashboard and current consumers]
+    P --> W[training-web bounded read routes]
+    P --> A[training-api approved internal contracts]
+    A --> W
+    W --> C[Browser dashboard and Search]
     W --> O[Coach orchestration]
-    P -.->|future, separately approved narrative contract| W
+    W --> I[Configured AI provider]
 ```
 
-The solid path is current behavior. Targeted activity resync reuses its one DetailedActivity response for both structured normalization and narrative extraction. Narrative-only changes do not enter changed-field classification and therefore do not rebuild Daily, Weekly, or Fitness/Fatigue/Form aggregates. Historical narrative backfill remains a standalone maintenance and recovery utility; normal sync does not perform historical backfill or broad retries. Narrative remains unexposed, unsearched, unexported, and outside Coach context.
+The diagram shows two approved read paths from PostgreSQL: direct bounded server-side `training-web` reads for ordinary presentation/Search workflows, and authenticated `training-api` contracts for coordinated or ETL-owned operations. Browser JavaScript still communicates with `training-web` only. Targeted activity resync reuses its one DetailedActivity response for both structured normalization and narrative extraction. Narrative-only changes do not enter changed-field classification and therefore do not rebuild Daily, Weekly, or Fitness/Fatigue/Form aggregates. Historical narrative backfill remains a standalone maintenance and recovery utility; normal sync does not perform historical backfill or broad retries. Narrative remains allowlisted and on demand; its Search and Coach use are governed by the web feature contracts.
 
 ## Current database contract
 
@@ -128,29 +129,29 @@ Operators should avoid deploying or restarting the ETL container during an activ
 
 ### Normal-sync recent narrative refresh
 
-Normal sync performs the initial DetailedActivity narrative inspection for each genuinely new activity after structured persistence. It also automatically refreshes known activities whose `date_local` is today or yesterday in `America/Denver`, provided `narrative_observed_at` is null or at least three hours old. The selector orders candidates by `date_local DESC, activity_id DESC`, limits the result to 10 activities, and excludes every activity ID already attempted as new during the same sync run. This adds at most 10 known-activity detail calls per normal sync; older activities and activities inside the cooldown remain untouched and use Resync Day for immediate or older corrections.
+Normal sync performs the initial DetailedActivity narrative inspection for each genuinely new activity after structured persistence. It also automatically refreshes known activities whose `date_local` is today or yesterday in `America/Denver`, provided `narrative_observed_at` is null or at least 1.5 hours old (the stored timestamp must be at or before the sync run timestamp minus 1.5 hours). The selector orders candidates by `date_local DESC, activity_id DESC`, limits the result to 10 activities, and excludes every activity ID already attempted as new during the same sync run. This adds at most 10 known-activity detail calls per normal sync; older activities and activities inside the cooldown remain untouched.
 
-The normal sync captures one UTC run timestamp for eligibility and successful inspection checkpoints. `narrative_observed_at` therefore means the most recent successful well-formed detailed narrative inspection. Detail fetch, malformed-input, and narrative persistence failures are isolated per activity: stored narrative and the prior checkpoint survive, later candidates continue, and structured sync is not rolled back. Narrative-only updates do not rebuild aggregates. Safe normal-sync counters report new activity discovery, detail attempts, recent candidates, recent attempts, successes, and failures without logging narrative values or provider payloads.
+The normal sync captures one UTC run timestamp for eligibility and successful inspection checkpoints. `narrative_observed_at` therefore means the most recent successful, well-formed detailed narrative inspection; it advances even when both optional narrative keys are omitted, and does not advance on fetch, malformed-input, or persistence failure. Manual Full Sync uses the same `sync_training.py` path and recent-refresh selector. Targeted Activity Resync, including Resync Day requests dispatched per activity, uses `resync_activity.py` instead and does not use this cooldown. Narrative-only updates do not rebuild aggregates. Safe normal-sync counters report new activity discovery, detail attempts, recent candidates, recent attempts, successes, and failures without logging narrative values or provider payloads.
 
 This policy uses bounded polling because the documented Strava activity webhook update fields cover title, type, and privacy, not description or private-note edits. It does not rely on webhooks and does not invoke the historical backfill.
 
 ## Current API and consumer surfaces
 
-The ETL-side Training API and internal API provide bounded, authenticated training data and approved ETL operations. The web application uses those boundaries and selected database-backed routes for dashboard presentation. Current activity search is limited and does not search narrative. The web repository now owns a narrow read-only `/api/activities/{activity_id}/narrative` route for on-demand Daily display; there is still no narrative export or search contract.
+The ETL-side `training-api` provides bounded, authenticated coordinated context and approved ETL operations. The web application also owns selected bounded database-backed routes for dashboard, Search, reporting, narrative presentation, and export. Current activity search is limited and does not search narrative. The web repository owns a narrow read-only `/api/activities/{activity_id}/narrative` route for on-demand Daily display; there is still no narrative export or Search implementation in this repository.
 
-Current Coach context assembly is bounded and source-labeled. Context receipts store allowlisted metadata and coverage, not prompts, raw provider payloads, or narrative bodies. Narrative is not currently part of Coach context.
+Current Coach context assembly is bounded and source-labeled. After authoritative context selects activities, `training-web` hydrates only those selected IDs with separate, bounded `description` and `private_note` values. These are athlete-authored observations, not measured truth or instructions, and narrative text is excluded from Durable Memory. Context Receipts store allowlisted coverage counts only, not narrative bodies. See `training-web/docs/AI_COACH.md` for the Coach contract.
 
-Operational logs record activity counts, names, dates, and calculated metrics in existing paths. Descriptions and private notes are not intentionally logged today. `http_json()` currently includes decoded provider error bodies in HTTP exception messages; this is a future sensitive-data risk and should not be expanded into narrative handling.
+Operational logs record activity counts, names, dates, and calculated metrics in existing paths. Descriptions and private notes are not intentionally logged today. In the inspected `http_json_with_metadata()` path, raw Strava HTTP error response bodies are consumed and discarded, not included in raised application errors. The typed error exposes the HTTP status and, when available, parsed allowlisted numeric rate-limit metadata. Credentials, tokens, raw headers, raw response bodies, narrative content, and other sensitive provider content must not be logged, included in raised errors, or returned in browser-facing responses.
 
 ## Description and private-note investigation status
 
 The currently verified official Strava API reference associates `description` with detailed activity retrieval. Summary activity retrieval does not currently provide the desired narrative contract, so normal list-only sync cannot populate descriptions. Official documentation was checked on 2026-09-23: the activity reference documents `GET /activities/{id}` and `DetailedActivity.description`; authentication documents refresh-token exchange and six-hour access-token expiry; rate-limit documentation documents overall and read-specific `X-RateLimit-*` and `X-ReadRateLimit-*` headers, daily reset at midnight UTC, and HTTP 429 behavior; the changelog records the current 2026 API changes and the planned 2027 base URL change. The backfill uses the current headers and existing API base URL without changing normal sync.
 
-The public API contract reviewed on 2026-09-23 did not establish an exact private-note field, endpoint, OAuth scope, availability rule, edit behavior, or clearing semantics. Private-note support must not be claimed without direct official documentation or a separately authorized, sanitized API probe.
+The public API contract reviewed on 2026-09-23 did not establish an exact private-note field, endpoint, OAuth scope, availability rule, edit behavior, or clearing semantics. ETL handles `private_note` as an optional allowlisted detail-response key, but that implementation does not establish an official Strava contract for the field.
 
 The eventual product target is every locally stored Strava activity since 2012, not only rides. The supplied handoff identifies approximately 3,860 activities; that is a supplied planning count, not a repository- or database-independent measurement verified during this investigation.
 
-Slice 1 verified description extraction from the documented `DetailedActivity` model and treats `private_note` as an optional allowlisted key without claiming it is an official documented field. Description ingestion, private-note feasibility, search/export, and Coach use are separate decisions. Uncertainty in a later consumer does not by itself invalidate bounded ingestion, but Coach use requires a later isolated architecture and product decision.
+Slice 1 verified description extraction from the documented `DetailedActivity` model and treats `private_note` as an optional allowlisted key without claiming it is an official documented field. Description ingestion, private-note feasibility, and search/export remain separate decisions. Bounded Coach use was subsequently implemented in `training-web`: selected activity IDs are hydrated as untrusted context, without claiming an official private-note field contract. See `training-web/docs/AI_COACH.md` for the consumer contract.
 
 ## Strava API change procedure
 
@@ -180,12 +181,9 @@ Mike is aware of this concern and has decided that, for this personal single-use
 ## Known gaps and future decisions
 
 - Determine how granted OAuth scopes can be observed safely without exposing secrets.
-- Establish whether a private-note field exists and what scope and privacy rules govern it.
-- Decide whether webhook, polling, deauthorization, and deletion handling are required.
-- Compare the smallest safe narrative persistence design before changing schema.
-- Define incremental refresh semantics for omitted, empty, cleared, unavailable, and failed states.
-- Design a previewable, checkpointed, rate-aware full-history backfill for approximately 3,860 supplied local activities since 2012.
-- Decide separately whether narrative belongs in activity detail, search, explicit export, Maintenance Readiness, or bounded Coach context.
+- Confirm the official private-note field, scope, privacy, availability, edit, and clearing contract before relying on it.
+- Decide whether webhook handling is needed and how deauthorization, token revocation, activity deletion, and retained backups should be handled.
+- Decide whether narrative should be exposed in additional activity-detail workflows, Search, explicit export, or Maintenance Readiness; bounded Coach hydration is already implemented in `training-web`.
 - Revisit the documented policy concern before commercial, multi-user, externally distributed, or changed AI-provider use.
 Strava intends AI interaction with Strava Data to occur through its official Strava MCP, allowing personal use while protecting its data from unauthorized AI ingestion, grounding, and redistribution.
 Maintaining a persistent cached copy of Strava Data would effectively prevent compliant commercialization of Training Intelligence under the current Strava API Policy, so any future commercial or multi-user offering would require a different data-source and retention architecture.

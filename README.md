@@ -74,7 +74,7 @@ The separate `training-web` repo owns:
 
 - FastAPI web app
 - browser dashboard UI
-- API routes
+- browser-facing FastAPI routes
 - NAS web deployment
 - static frontend files
 
@@ -103,7 +103,9 @@ BIOS dated May 5, 2026
 - Docker services:
   - `training-runner`
   - `training-web` in the separate `training-web` project
-  - `training-api` is defined for future or controlled deployment
+  - `training-api` is the deployed authenticated synchronous ETL facade
+- `training-runner` executes scheduled, queued, and background ETL work, including approved backfills and rebuilds.
+- `training-api` serves only explicitly approved synchronous ETL operations and coordinated ETL-owned contracts. It is not a universal query layer or the mandatory path for ordinary `training-web` database reads.
 - Shared Docker network: `training_net`
 - PostgreSQL is available to containers through `host.docker.internal`
 - HarrisNAS backup storage is mounted through NFS at `/mnt/harrisnas/backups`

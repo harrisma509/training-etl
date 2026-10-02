@@ -1,10 +1,12 @@
 # Training API Architecture and Operations
 
+This document describes the internal `training-api` container implemented and deployed from the `training-etl` repository. It is not the browser-facing API owned by the separate `training-web` repository. The accepted cross-repository boundary is defined in [`docs/ARD/TRAINING_SYSTEM_SERVICE_BOUNDARIES.md`](ARD/TRAINING_SYSTEM_SERVICE_BOUNDARIES.md).
+
 ## Overview
 
-The Training API is the controlled application boundary between Training Intelligence data and consuming applications. It exposes narrow, purpose-built HTTP endpoints over authoritative data produced by the Training ETL pipeline and stored in PostgreSQL.
+The Training API is a narrow authenticated synchronous facade over explicitly approved ETL functions and coordinated ETL-owned contracts. It exposes purpose-built internal HTTP endpoints over authoritative data produced by the Training ETL pipeline and stored in PostgreSQL.
 
-The API exists to prevent consumers from coupling directly to ETL-owned tables, calculations, and internal schemas. Consumers request stable application-level resources while the ETL and database remain free to evolve behind those contracts.
+It exists where an internal service boundary is justified by authoritative ETL execution, coordinated time-aligned context, authentication, security, scaling, or schema insulation. It does not replace bounded, parameterized, server-side read-only PostgreSQL queries in `training-web` for ordinary dashboard, Search, reporting, lookup, narrative, or presentation workflows.
 
 The current primary consumers are:
 
@@ -14,7 +16,7 @@ The current primary consumers are:
 
 The central architectural rule is:
 
-> Training ETL owns ingestion, normalization, derived metrics, Weekly Audit calculations, and authoritative training state. Training API exposes bounded read and write contracts. Consumers interpret the returned data but do not reimplement the calculations.
+> `training-etl` owns ingestion, normalization, schema meaning, derived metrics, Weekly Audit calculations, and authoritative training state. `training-api` exposes only approved internal synchronous contracts. `training-web` may directly read processed PostgreSQL data for ordinary browser-facing workflows and must not reimplement authoritative calculations.
 
 ---
 
@@ -24,7 +26,7 @@ The Training API should:
 
 - Expose authoritative Training Intelligence data through stable contracts
 - Keep PostgreSQL credentials and internal schemas away from browser code
-- Prevent `training-web` and AI-provider adapters from querying ETL tables directly
+- Keep internal ETL operations, coordinated aggregates, and provider credentials behind an authenticated server-side boundary where justified
 - Provide narrow endpoints tailored to product workflows
 - Validate request parameters and response shapes
 - Use parameterized SQL
@@ -63,22 +65,13 @@ Training ETL
     |-- produce Weekly Audit and training state
     v
 PostgreSQL
+    |\
+    | \\-- training-web bounded read-only queries -> browser-facing routes -> browser
     |
-    v
-Training API
-    |
-    |-- public/browser-facing resources
-    |-- internal server-to-server resources
-    |-- request validation
-    |-- response shaping
-    |-- bounded queries
-    |-- sanitized errors
-    v
-Consumers
-    |
-    |-- training-web dashboard
-    |-- AI Coach orchestration
-    |-- operational tools
+    \\-- training-api approved coordinated/ETL contracts -> training-web server-side consumers
+
+Browser -> training-web only
+training-web -> configured AI provider for explicit Coach turns
 ```
 
 ### Service ownership
@@ -90,7 +83,7 @@ Consumers
 | Derived training metrics | Training ETL |
 | Weekly Audit calculation | Training ETL |
 | Authoritative PostgreSQL state | Training ETL / PostgreSQL |
-| API contracts and query boundaries | Training API |
+| Approved internal API contracts and ETL operation boundaries | training-api |
 | Dashboard presentation | training-web |
 | Coach sessions and messages | training-web / PostgreSQL |
 | AI-provider calls | training-web |
@@ -124,13 +117,13 @@ Do not reorganize the repository solely to match this example. Document the actu
 
 ---
 
-## API Boundary
+## System HTTP Boundaries
 
-The Training API has two conceptual surfaces.
+The Training Intelligence system has two distinct HTTP surfaces.
 
-### Browser-facing API
+### Browser-facing routes owned by `training-web`
 
-Browser-facing endpoints support the Training Intelligence application. These endpoints should expose only the data needed by the UI and should never disclose:
+Browser-facing endpoints in this document are not `training-api` endpoints. They are owned by `training-web`, which may use direct bounded server-side PostgreSQL reads for ordinary product workflows. They should expose only the data needed by the UI and should never disclose:
 
 - Database credentials
 - Internal API tokens
@@ -139,11 +132,11 @@ Browser-facing endpoints support the Training Intelligence application. These en
 - Internal stack traces
 - Arbitrary health or training records outside the endpoint's documented scope
 
-Browser-facing endpoint authentication and authorization should follow the deployment's security model. The current trusted-LAN deployment is not a substitute for authentication if the application later becomes externally accessible.
+Browser-facing endpoint authentication and authorization should follow the deployment's security model. The current trusted-LAN deployment is not a substitute for authentication if the application later becomes externally accessible. Browser JavaScript communicates with `training-web` only.
 
-### Internal API
+### Internal endpoints owned by `training-api`
 
-Internal endpoints support trusted service-to-service workflows. The AI Coach context endpoint is the primary example:
+Internal endpoints support trusted service-to-service workflows. The AI Coach context endpoint and synchronous activity resync are current examples:
 
 ```text
 GET /internal/coach/context/current
@@ -157,6 +150,8 @@ Internal endpoints:
 - Must not expose arbitrary query controls
 - Must not log sensitive response bodies
 - Must return sanitized errors
+
+`training-api` is not a mandatory hop for every PostgreSQL read, a generic SQL service, an arbitrary export interface, or an AI-provider client.
 
 ---
 
@@ -247,6 +242,7 @@ latest_completed_weekly_audit
 weekly_load_history
 weekly_tid_history
 recent_days
+daily_checkins
 fitness_fatigue_form
 recovery_history
 athlete_narrative
@@ -356,6 +352,23 @@ through `X-Internal-Token`.
 - Relevant commentary
 
 The endpoint should avoid returning unbounded raw activity history. The parameter is server-to-server only and still requires `X-Internal-Token`.
+
+#### `daily_checkins`
+
+Returns persisted athlete-reported records from `public.daily_checkin` for the
+same inclusive `America/Denver` calendar-date window as `recent_days`.
+`daily_days` defaults to 28 and must be an integer from 7 through 365. Dates are
+date-only values; rows are ordered newest first by `checkin_date`. Only stored
+check-ins are returned, so an empty window is `[]` and missing dates are not
+synthesized.
+
+Each row contains `date`, `overall_status`, `note`, nullable `readiness`,
+`energy`, `soreness`, `pain`, `physical_labor`, and `handling_quality`, plus an
+allowlisted `flags` array. Null values remain null. `coverage` reports whether
+check-ins were included, their count, and the oldest and newest returned dates.
+These current athlete reports are distinct from activity rows, measured
+`recovery_history`, weekly `athlete_narrative`, and Durable Memories; they are
+not calculated training truth.
 
 #### `fitness_fatigue_form`
 
@@ -793,6 +806,7 @@ latest_completed_weekly_audit
 weekly_load_history
 weekly_tid_history
 recent_days
+daily_checkins
 fitness_fatigue_form
 recovery_history
 athlete_narrative
@@ -858,15 +872,13 @@ These measurements can help reduce redundant model context without removing safe
 
 ### AI Coach context
 
-The current `training-web` guard rejects model-facing authoritative context above:
-
-```text
-240,000 serialized characters
-A 240,000-character guard protects against runaway context, but it is not primarily a spending limit. It also protects latency, model focus, provider-window headroom, and accidental payload expansion. Your explicit per-turn and monthly spending limits remain the real cost controls.
-
-```
-
-The Training API should normally remain well below that ceiling. The ceiling is a consumer safety guard, not a target response size.
+The current `training-web` consumer guard and its exact value are defined in
+`training-web/docs/AI_COACH.md`. It applies to serialized authoritative
+Training Intelligence context before provider inference; it does not cap the
+complete provider request, measure provider tokens, or define the provider's
+context-window limit. It is not a Training API response-size limit, and the
+Training API should normally remain well below it. Per-turn and monthly Coach
+budgets remain the spending controls.
 
 Do not add more context simply because the provider supports a large context window. Add a field only when it improves a documented coaching decision.
 
