@@ -75,7 +75,7 @@ The separate `training-web` repo owns:
 - FastAPI web app
 - browser dashboard UI
 - browser-facing FastAPI routes
-- NAS web deployment
+- web deployment is owned by the separate `training-web` repository
 - static frontend files
 
 Schema changes in this repo must be validated against the web app before deploy.
@@ -691,6 +691,22 @@ When entering the token, paste only the token value. Do not paste the surroundin
 
 ### Container and deployment notes
 
+The supported deployment scripts are `deploy_training_etl.ps1` on Windows and
+`deploy_to_server_from_mac.sh` on macOS/Linux. Both require a clean worktree
+whose `HEAD` equals its configured upstream revision and package the same four
+members: `src`, `Dockerfile`, `requirements.txt`, and
+`docker-compose.server.yml`. Their dry-run modes inspect the archive locally
+without uploading it.
+
+The scripts stage files only; they do not rebuild or restart containers. Apply
+the operational action required by the changed artifact after staging:
+
+- Python source change: restart the affected `training-runner` or `training-api` service.
+- `strava.env` change: restart the affected service.
+- Dockerfile or requirements change: rebuild the image and recreate affected services.
+- Compose command, port, volume, or health-check change: recreate the service or project.
+- Documentation-only change: no runtime action.
+
 The current runtime is split between two containers in the same Compose project:
 
 - `training-runner`: runs the scheduled ETL worker and normal sync automation
@@ -786,8 +802,8 @@ Future handlers should adhere to these rules:
 - Do not commit real Strava tokens
 - Do not commit database passwords
 - Do not commit `.env` files
-- Do not mount NAS family/cloud/photo/finance folders
-- NAS runtime folders are limited to `/docker/training`
+- Do not mount unrelated host family/cloud/photo/finance folders
+- Runtime folders are limited to the approved training mounts
 - Do not expose raw Strava JSON or secrets in logs or dashboard APIs
 
 ## Validation

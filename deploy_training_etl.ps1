@@ -29,7 +29,26 @@ try {
 
     Write-Host ""
     Write-Host "Packaging training-etl..." -ForegroundColor Cyan
-    Write-Host "Uncommitted changes are included." -ForegroundColor Yellow
+
+    Push-Location $ProjectDir
+    try {
+        $workingTree = @(git.exe status --porcelain)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to inspect Git working tree."
+        }
+        if ($workingTree.Count -gt 0) {
+            throw "Deployment requires a clean Git working tree."
+        }
+        $revision = (git.exe rev-parse HEAD).Trim()
+        $upstreamRevision = (git.exe rev-parse --verify '@{u}').Trim()
+        if ($LASTEXITCODE -ne 0 -or $revision -notmatch '^[0-9a-f]{40}$' -or $revision -ne $upstreamRevision) {
+            throw "Deployment requires HEAD to equal its configured upstream revision."
+        }
+        Write-Host "Deploying revision $revision" -ForegroundColor DarkCyan
+    }
+    finally {
+        Pop-Location
+    }
 
     if (Test-Path $LocalArchive) {
         Remove-Item $LocalArchive -Force
@@ -94,7 +113,8 @@ try {
 
     Write-Host ""
     Write-Host "Training-etl deployed successfully." -ForegroundColor Green
-    Write-Host "Containers were not rebuilt or restarted."
+    Write-Host "No containers were rebuilt or restarted by this script."
+    Write-Host "Apply the documented restart, recreation, or rebuild action for the changed artifact."
 }
 catch {
     Write-Host ""

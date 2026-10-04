@@ -16,7 +16,7 @@ This repo contains the ETL, data builders, database writers, schema SQL, Strava 
 
 Before any Strava-related work, read `docs/STRAVA_ARCHITECTURE.md` and verify the latest official Strava developer documentation and API reference. Record relevant contract findings before changing Strava code, schema, OAuth, endpoints, fields, webhooks, rate handling, retention, or integrations.
 
-The separate `training-web` repo owns the FastAPI web app, dashboard routes, browser UI, static frontend files, and NAS web deployment.
+The separate `training-web` repo owns the FastAPI web app, dashboard routes, browser UI, static frontend files, and HarrisServer web deployment.
 
 ## Repo Boundary
 
@@ -48,7 +48,7 @@ The accepted cross-repository and runtime boundary is documented in `docs/ARD/TR
 - ETL runs separately from the web app.
 - Database-backed data is consumed by the `training-web` dashboard.
 - Schema or ETL changes can break web routes, so validate affected web endpoints after database changes.
-- Local `.venv` may differ from NAS/container runtime.
+- Local `.venv` may differ from the HarrisServer/container runtime.
 - Local syntax checks are useful but are not sufficient by themselves.
 
 ## Safety Rules
@@ -130,6 +130,21 @@ For Python changes:
 ```bash
 python -m py_compile src/changed_file.py
 ```
+
+## Deployment tooling
+
+Use `deploy_training_etl.ps1` on Windows or
+`deploy_to_server_from_mac.sh` on macOS/Linux. Both require a clean worktree
+whose `HEAD` equals its configured upstream revision and package the same four
+members: `src`, `Dockerfile`, `requirements.txt`, and
+`docker-compose.server.yml`. Use `-DryRun` or `--dry-run` to inspect the local
+archive without upload.
+
+The scripts only stage files and do not rebuild or restart containers. After a
+source change, restart the affected ETL service. A Dockerfile or requirements
+change requires an image rebuild and recreation; a Compose command, port,
+volume, or health-check change requires service/project recreation. Routine
+source deployment does not use `--force-recreate`.
 
 ## Permanent architecture and execution budget
 
