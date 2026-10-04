@@ -131,6 +131,31 @@ For Python changes:
 python -m py_compile src/changed_file.py
 ```
 
+## Permanent architecture and execution budget
+
+For frontend ownership and cross-repository boundaries, use
+`training-web/docs/FRONTEND_ARCHITECTURE.md` together with this repository's
+constitution and the accepted service-boundary ARD. Permanent instructions
+and architecture documents are authoritative, followed by executable
+contracts, current source, runbooks, and Git history. Temporary prompts and
+chat transcripts are not sources of truth.
+
+Apply single-pass rigor: discover once, patch narrowly, validate in order, and
+stop when evidence is green.
+
+- One ownership inventory per slice and one focused follow-up search for an
+  unclear boundary.
+- At most two narrow patch attempts per boundary.
+- Restore formatter or line-ending churn immediately; do not rebuild whole
+  source files through broad replacement.
+- Stop and report when a bounded change requires a broad rewrite.
+- Validate in order: focused contract, changed-file syntax, adjacent contracts,
+  complete relevant suite, `git diff --check`, and scope review.
+- Trust an unchanged green baseline and do not rerun complete suites after they
+  are green unless source or test code changes again.
+- After commit, push normally and report the final clean status; do not amend,
+  force-push, or perform speculative cleanup.
+
 ## Automated Testing
 
 - Read [docs/TESTING_GUIDE.md](../docs/TESTING_GUIDE.md) before changing Python behavior.

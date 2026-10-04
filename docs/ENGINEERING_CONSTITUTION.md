@@ -42,7 +42,7 @@ For work involving repository ownership, container or service placement, databas
 - `training-web/docs/AI_COACH_CONTEXT_RECEIPTS.md`: focused current Context Receipt shape, immutability, allowlist, and compatibility contract.
 - `training-web/docs/AI_COACH_PERSONALIZATION.md`: focused current Custom Instructions and Durable Memories contract.
 - `training-web/docs/COMPONENTS_SERVICE_API.md`: service-event contracts, historical snapshots, two-clock semantics, and Components UI adoption.
-- `training-web/docs/FRONTEND_REFACTOR_HANDOFF.md`: current vanilla-JavaScript ownership model and safe refactor sequence.
+- `training-web/docs/FRONTEND_ARCHITECTURE.md`: current vanilla-JavaScript ownership model, registry contract, deployment modes, and safe refactor sequence.
 - `training-web/README.md`: web-layer purpose, runtime, deployment, and repository boundary.
 
 ### Conflict handling
@@ -339,7 +339,7 @@ Do not use global overflow clipping, arbitrary width reduction, or hidden conten
 
 ### 8.7 Preserve the current frontend architecture
 
-The frontend is intentionally vanilla JavaScript with shared state, API, and feature modules. Use `training-web/docs/FRONTEND_REFACTOR_HANDOFF.md` for current ownership and safe refactor guidance. Do not introduce a framework or broad rewrite without an approved architecture decision.
+The frontend is intentionally vanilla JavaScript with shared state, API, and feature modules. Use `training-web/docs/FRONTEND_ARCHITECTURE.md` for current ownership and safe refactor guidance. Do not introduce a framework or broad rewrite without an approved architecture decision.
 
 ---
 
