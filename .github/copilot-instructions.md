@@ -128,8 +128,10 @@ For Python changes:
 1. Run syntax checks on touched Python files.
 
 ```bash
-python -m py_compile src/changed_file.py
+./.venv/bin/python -m py_compile src/changed_file.py
 ```
+
+On Windows, use `\.\.venv\Scripts\python.exe -m py_compile src\changed_file.py`.
 
 ## Deployment tooling
 

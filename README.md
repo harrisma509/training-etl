@@ -16,21 +16,21 @@ Python ETL project for the Training Web App.
 Run the automated unit tests from the repository root with the repository-local virtual environment:
 
 ```bash
-python3 -m pip install -r requirements-dev.txt
-python3 -m pytest --collect-only -q
-python3 -m pytest -q
+./.venv/bin/python -m pip install -r requirements-dev.txt
+./.venv/bin/python -m pytest --collect-only -q
+./.venv/bin/python -m pytest -q
 ```
 
 For a focused run:
 
 ```bash
-python3 -m pytest tests/test_daily_builder.py -q
-python3 -m pytest -k budget -q
+./.venv/bin/python -m pytest tests/test_daily_builder.py -q
+./.venv/bin/python -m pytest -k budget -q
 ```
 
 Existing `unittest.TestCase` tests run through pytest. The default suite uses fakes, mocks, and synthetic data; it must not contact OpenAI or other paid providers, Strava, production training-api, production PostgreSQL, Docker, SSH, or deployment operations. Automated unit tests are separate from manual runtime, provider, and deployment smoke tests.
 
-On Windows, activate the repository virtual environment first and use `python -m pytest -q` when `python3` is unavailable.
+On Windows, use `\.\.venv\Scripts\python.exe -m pytest -q`.
 
 For the complete testing and AI-assisted workflow, see [docs/TESTING_GUIDE.md](docs/TESTING_GUIDE.md).
 
@@ -40,7 +40,7 @@ The complete daily Fitness/Fatigue/Form series can be previewed or populated
 with the focused CLI. Run it from the repository root:
 
 ```powershell
-python .\src\rebuild_fitness_fatigue.py --dry-run
+\.\.venv\Scripts\python.exe .\src\rebuild_fitness_fatigue.py --dry-run
 ```
 
 `--dry-run` reads `daily_training`, calculates the series from January 1, 2025
@@ -51,7 +51,7 @@ writes.
 After reviewing the preview, populate or replace the complete series with:
 
 ```powershell
-python .\src\rebuild_fitness_fatigue.py --apply
+\.\.venv\Scripts\python.exe .\src\rebuild_fitness_fatigue.py --apply
 ```
 
 `--apply` replaces `public.daily_fitness_fatigue` in one transaction, verifies

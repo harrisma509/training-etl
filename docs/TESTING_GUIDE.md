@@ -27,7 +27,18 @@ Focused examples:
 ./.venv/bin/python -m pytest -x -q
 ```
 
-On Windows, activate the repository virtual environment first and use `python -m pytest`; use `python -m pytest -q` when `python3` is unavailable.
+### Windows
+
+Run Python tooling through the repository-local interpreter explicitly. Virtual-environment activation is optional and must not be assumed.
+
+```powershell
+\.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+\.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+\.\.venv\Scripts\python.exe -m pytest --collect-only -q
+\.\.venv\Scripts\python.exe -m pytest -q
+```
+
+Do not use bare `python`, `python3`, `py`, `pytest`, `pip`, or `pip3` when the repository-local `.venv` exists.
 
 ## Local search tooling
 
