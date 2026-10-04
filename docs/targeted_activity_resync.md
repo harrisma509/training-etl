@@ -34,8 +34,15 @@ The web dashboard may enqueue one `activity_resync` request per canonical activi
 Run the CLI from the repo root:
 
 ```bash
-python src/resync_activity.py <activity_id>
-python src/resync_activity.py 1234567890 --dry-run
+./.venv/bin/python src/resync_activity.py <activity_id>
+./.venv/bin/python src/resync_activity.py 1234567890 --dry-run
+```
+
+On Windows:
+
+```powershell
+.\.venv\Scripts\python.exe src\resync_activity.py <activity_id>
+.\.venv\Scripts\python.exe src\resync_activity.py 1234567890 --dry-run
 ```
 
 ### Required inputs
@@ -249,14 +256,26 @@ The implementation includes the following safeguards:
 2. Run the CLI in dry-run mode:
 
 ```bash
-python src/resync_activity.py 1234567890 --dry-run
+./.venv/bin/python src/resync_activity.py 1234567890 --dry-run
+```
+
+On Windows:
+
+```powershell
+.\.venv\Scripts\python.exe src\resync_activity.py 1234567890 --dry-run
 ```
 
 3. Review the returned `changed_fields`, `affected_dates`, and `weekly_skip_reason`.
 4. If the output matches expectations, run the live command only in the intended runtime environment:
 
 ```bash
-python src/resync_activity.py 1234567890
+./.venv/bin/python src/resync_activity.py 1234567890
+```
+
+On Windows:
+
+```powershell
+.\.venv\Scripts\python.exe src\resync_activity.py 1234567890
 ```
 
 5. Verify the resulting `daily_training` and `weekly_training` rows in Postgres.

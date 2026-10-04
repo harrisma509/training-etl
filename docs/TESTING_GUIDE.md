@@ -32,13 +32,15 @@ Focused examples:
 Run Python tooling through the repository-local interpreter explicitly. Virtual-environment activation is optional and must not be assumed.
 
 ```powershell
-\.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-\.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-\.\.venv\Scripts\python.exe -m pytest --collect-only -q
-\.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest --collect-only -q
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
 Do not use bare `python`, `python3`, `py`, `pytest`, `pip`, or `pip3` when the repository-local `.venv` exists.
+
+The current ETL Python baseline is 94 passed tests and 52 subtests.
 
 ## Local search tooling
 

@@ -30,7 +30,7 @@ For a focused run:
 
 Existing `unittest.TestCase` tests run through pytest. The default suite uses fakes, mocks, and synthetic data; it must not contact OpenAI or other paid providers, Strava, production training-api, production PostgreSQL, Docker, SSH, or deployment operations. Automated unit tests are separate from manual runtime, provider, and deployment smoke tests.
 
-On Windows, use `\.\.venv\Scripts\python.exe -m pytest -q`.
+On Windows, use `.\.venv\Scripts\python.exe -m pytest -q`.
 
 For the complete testing and AI-assisted workflow, see [docs/TESTING_GUIDE.md](docs/TESTING_GUIDE.md).
 
@@ -40,7 +40,7 @@ The complete daily Fitness/Fatigue/Form series can be previewed or populated
 with the focused CLI. Run it from the repository root:
 
 ```powershell
-\.\.venv\Scripts\python.exe .\src\rebuild_fitness_fatigue.py --dry-run
+.\.venv\Scripts\python.exe .\src\rebuild_fitness_fatigue.py --dry-run
 ```
 
 `--dry-run` reads `daily_training`, calculates the series from January 1, 2025
@@ -51,7 +51,7 @@ writes.
 After reviewing the preview, populate or replace the complete series with:
 
 ```powershell
-\.\.venv\Scripts\python.exe .\src\rebuild_fitness_fatigue.py --apply
+.\.venv\Scripts\python.exe .\src\rebuild_fitness_fatigue.py --apply
 ```
 
 `--apply` replaces `public.daily_fitness_fatigue` in one transaction, verifies
@@ -691,12 +691,12 @@ When entering the token, paste only the token value. Do not paste the surroundin
 
 ### Container and deployment notes
 
-The supported deployment scripts are `deploy_training_etl.ps1` on Windows and
-`deploy_to_server_from_mac.sh` on macOS/Linux. Both require a clean worktree
+The supported deployment scripts are `.\deploy_training_etl.ps1` on Windows
+and `./deploy_to_server_from_mac.sh` on macOS/Linux. Both require a clean worktree
 whose `HEAD` equals its configured upstream revision and package the same four
 members: `src`, `Dockerfile`, `requirements.txt`, and
 `docker-compose.server.yml`. Their dry-run modes inspect the archive locally
-without uploading it.
+without uploading it. Use `-DryRun` on Windows or `--dry-run` on macOS/Linux.
 
 The scripts stage files only; they do not rebuild or restart containers. Apply
 the operational action required by the changed artifact after staging:
