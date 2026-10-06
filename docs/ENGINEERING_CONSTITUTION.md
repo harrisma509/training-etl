@@ -490,7 +490,7 @@ Expand routine context only when evidence shows value. Prefer typed, allowlisted
 
 Search, filter, preview, and documented CSV export can enable Excel, Copilot, Coach, and other trusted analysis without creating a custom integration for every question.
 
-Sensitive fields remain excluded by default, and exports must preserve units, provenance, bounds, and timezone semantics.
+Sensitive fields require an explicit, documented product contract and visible user control. Each export must document its inclusion default, privacy boundary, and exclusions. Search currently includes Private Note by default and provides an explicit control to exclude it. Exports must preserve units, provenance, bounds, and timezone semantics.
 
 ### 13.5 Alerts require trustworthy semantics
 
