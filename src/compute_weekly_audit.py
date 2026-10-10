@@ -20,7 +20,6 @@ from datetime import datetime, timedelta, timezone
 from db_writer import connect_db
 from logging_config import configure_logging
 from settings import get_db_config
-from weekly_builder import is_open_zero_load_week
 
 logger = logging.getLogger(__name__)
 from weekly_audit_queries import (
@@ -59,10 +58,6 @@ def main():
 
             computed_at = datetime.now(timezone.utc)
             weekly_rows = weekly_rows_for_audit(weekly_rows, computed_at)
-            if not weekly_rows:
-                logger.info("No completed or activity-bearing Weekly rows found; nothing to audit.")
-                return
-
             zone_rows = fetch_weekly_zone_summary(cur)
             daily_rows = fetch_daily_training(cur)
             weight_rows = fetch_health_rows(cur, "health_weight", ["date", "weight_lb"])
@@ -108,15 +103,8 @@ def main():
 
 
 def weekly_rows_for_audit(weekly_rows, as_of):
-    return {
-        week_start: weekly_data
-        for week_start, weekly_data in weekly_rows.items()
-        if not is_open_zero_load_week(
-            week_start,
-            weekly_data.get("total_load"),
-            as_of,
-        )
-    }
+    del as_of
+    return weekly_rows
 
 
 def get_week_dates(week_start):
