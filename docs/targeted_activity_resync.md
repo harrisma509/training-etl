@@ -144,6 +144,10 @@ The affected date rebuild path is the operational heart of the resync:
 
 Weekly rebuilds are done by reading all `daily_training` rows and calling `build_weekly_training()` from [src/weekly_builder.py](../src/weekly_builder.py). The logic refreshes the full weekly table rather than patching a single week row.
 
+The builder uses the current `America/Denver` week as its bounded final week. When there is no activity in that open week, it emits that Monday-start row with zero activity totals; it appends only the current week rather than filling every historical week after the last activity. Its chronic value is populated only when the existing 28-day calculation has sufficient history. A/C, ramp, remaining-to-ramp, status, and status text remain null for the open zero-load week. Once activity arrives, the same week is rebuilt with the normal calculations.
+
+Normal sync and targeted Weekly rebuilds are idempotent replacements of `weekly_training`; they do not modify the independent `weekly_commentary` table. The post-sync audit pass skips an open zero-load week rather than generating an audit from incomplete data.
+
 ## Dry-run behavior
 
 `--dry-run` does not write any database rows. It calls `preview_resync()` instead of `resync_activity()`.

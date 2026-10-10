@@ -1,29 +1,33 @@
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
+from constants import APP_TIMEZONE
 
 HARD_BANDS = {"Very Hard", "Epic Hard"}
 
 
-def build_weekly_training(daily_rows):
-    if not daily_rows:
-        return []
+def build_weekly_training(daily_rows, as_of=None):
+    current_date = local_date(as_of)
+    current_week_start = week_start_monday(current_date)
 
     daily_by_date = {}
 
-    for row in daily_rows:
+    for row in daily_rows or []:
         d = parse_date(row["date"])
         daily_by_date[d] = row
 
-    min_date = min(daily_by_date.keys())
-    max_date = max(daily_by_date.keys())
-
-    week_starts = []
-    current_week = week_start_monday(min_date)
-    last_week = week_start_monday(max_date)
-
-    while current_week <= last_week:
-        week_starts.append(current_week)
-        current_week += timedelta(days=7)
+    if daily_by_date:
+        first_week = week_start_monday(min(daily_by_date))
+        last_activity_week = week_start_monday(max(daily_by_date))
+        week_starts = []
+        week = first_week
+        while week <= last_activity_week:
+            week_starts.append(week)
+            week += timedelta(days=7)
+        if current_week_start > last_activity_week:
+            week_starts.append(current_week_start)
+    else:
+        week_starts = [current_week_start]
 
     weekly_rows = []
     prior_week_load = None
@@ -51,24 +55,29 @@ def build_weekly_training(daily_rows):
         chronic_daily_c = calculate_chronic_daily_c(daily_by_date, ws)
         chronic_weekly_cw = round(chronic_daily_c * 7, 1) if chronic_daily_c is not None else None
 
+        open_zero_load_week = ws == current_week_start and total_load == 0
+
         ac_ratio = None
-        if chronic_weekly_cw and chronic_weekly_cw > 0:
+        if not open_zero_load_week and chronic_weekly_cw and chronic_weekly_cw > 0:
             ac_ratio = round(total_load / chronic_weekly_cw, 2)
 
         ramp_pct = None
-        if prior_week_load is not None and prior_week_load > 0:
+        if not open_zero_load_week and prior_week_load is not None and prior_week_load > 0:
             ramp_pct = round((total_load - prior_week_load) / prior_week_load, 3)
 
-        status_level, status_text = weekly_status(
-            total_load=total_load,
-            ac_ratio=ac_ratio,
-            ramp_pct=ramp_pct,
-            very_hard_epic_days=very_hard_epic_days,
-            chronic_daily_c=chronic_daily_c,
-        )
+        if open_zero_load_week:
+            status_level, status_text = None, None
+        else:
+            status_level, status_text = weekly_status(
+                total_load=total_load,
+                ac_ratio=ac_ratio,
+                ramp_pct=ramp_pct,
+                very_hard_epic_days=very_hard_epic_days,
+                chronic_daily_c=chronic_daily_c,
+            )
 
         remaining_to_20pct_ramp = None
-        if prior_week_load is not None and prior_week_load > 0:
+        if not open_zero_load_week and prior_week_load is not None and prior_week_load > 0:
             remaining_to_20pct_ramp = max(0, round((prior_week_load * 1.2) - total_load))
 
         weekly_rows.append({
@@ -107,6 +116,18 @@ def build_weekly_training(daily_rows):
     return weekly_rows
 
 
+def local_date(as_of):
+    if as_of is None:
+        return datetime.now(ZoneInfo(APP_TIMEZONE)).date()
+    if isinstance(as_of, datetime):
+        if as_of.utcoffset() is None:
+            raise ValueError("as_of datetime must be timezone-aware")
+        return as_of.astimezone(ZoneInfo(APP_TIMEZONE)).date()
+    if isinstance(as_of, date):
+        return as_of
+    raise TypeError("as_of must be a date, timezone-aware datetime, or None")
+
+
 def parse_date(value):
     if isinstance(value, date):
         return value
@@ -127,6 +148,12 @@ def int_or_zero(value):
         return 0
 
     return int(round(float(value)))
+
+
+def is_open_zero_load_week(week_start, total_load, as_of):
+    if total_load is None or int_or_zero(total_load) != 0:
+        return False
+    return parse_date(week_start) == week_start_monday(local_date(as_of))
 
 
 def count_very_hard_epic_days(rows):
