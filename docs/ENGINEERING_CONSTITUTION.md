@@ -89,6 +89,76 @@ When asked to create a GitHub Copilot coding-agent prompt, save the final prompt
 
 ---
 
+### 2.1 Fresh-Session Git Synchronization Gate
+
+Every new or resumed Copilot/GHC session MUST complete a fresh source-control
+preflight before architecture investigation, source editing, cherry-picking,
+testing changes, committing, pushing, or deployment. A resumed session MUST
+repeat the preflight when remote or repository state may have changed.
+
+The session MUST identify every repository in scope, including sibling
+repositories affected by shared contracts, tests, deployment, or runtime
+behavior. In each repository, run this baseline from the repository root:
+
+```bash
+git status --short --untracked-files=all
+git branch --show-current
+git rev-parse HEAD
+git fetch origin
+git rev-parse origin/main
+git log --oneline --decorate --graph --all -15
+git rev-list --left-right --count HEAD...origin/main
+git status
+```
+
+The output MUST be interpreted, not merely executed. `origin/main` is not
+trusted until the real fetch succeeds. The session MUST also check for active
+merge, rebase, or cherry-pick state. If fetch fails or remote state cannot be
+verified, the session MUST STOP; read-only investigation MAY continue only when
+clearly labeled as using an unverified snapshot and it MUST NOT lead to edits,
+commits, pushes, or deployment.
+
+State handling is mandatory:
+
+- A clean, synchronized branch MAY proceed after recording the hashes.
+- An ahead-only branch MUST be reviewed before release; it MUST NOT be
+  deployed as though it were remote `main`.
+- A behind-only branch MUST be updated from fetched remote state through the
+  smallest safe, explicitly chosen method before mutation or release.
+- A dirty or untracked worktree MUST STOP. Preserve the work first; do not
+  clean, reset, stash, or overwrite it automatically.
+- A diverged branch MUST STOP before editing. Preserve all local work with a
+  backup branch or another durable recovery point, inspect both histories, and
+  reconcile from current `origin/main` using the smallest safe method, such as
+  a recovery branch with ordered cherry-picks. Do not automatically run
+  `git pull`, merge unrelated histories, rebase, force-push, or discard a side.
+- An active merge, rebase, or cherry-pick MUST be understood and completed,
+  continued, or safely stopped before unrelated work begins.
+- A cross-repository mismatch MUST STOP when sibling state affects contracts,
+  tests, deployment, or runtime behavior. Validate all participating
+  repositories before deploying either one.
+
+No local work may be erased, overwritten, cleaned, reset, stashed, or
+force-pushed unless it is already preserved by an explicit durable recovery
+point and the action is intentional and documented. A deployment that uses
+`rsync --delete`, archive replacement, or equivalent destructive
+synchronization treats remote-only files as disposable; it MUST NEVER run from
+a stale or unpushed tree.
+
+Before pushing or deploying, the session MUST rerun the preflight when the
+session is long-running or remote state may have changed. The release gate
+requires all of the following:
+
+- tests passed on the exact release commit;
+- the intended release branch is checked out;
+- the worktree is clean and no Git operation is active;
+- local `HEAD` equals freshly fetched `origin/main` exactly after any normal
+  push;
+- the tested commit is the commit being released;
+- deployment tooling's clean-tree and pushed-commit safeguards pass;
+- every participating repository is validated;
+- the rollback commit and release hashes are recorded in the completion report.
+
 ## 3. Core Engineering Principles
 
 ### 3.1 Truth over convenience
