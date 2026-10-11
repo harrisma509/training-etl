@@ -1608,6 +1608,7 @@ CREATE TABLE public.plan_template (
     template_name text NOT NULL,
     template_description text NULL,
     sort_order integer DEFAULT 0 NOT NULL,
+    is_favorite boolean DEFAULT false NOT NULL,
     is_active boolean DEFAULT true NOT NULL,
     created_at timestamptz DEFAULT now() NOT NULL,
     updated_at timestamptz DEFAULT now() NOT NULL,

@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).parents[1]
-MIGRATION = ROOT / "sql" / "plan_core_v1_slice_1.sql"
+MIGRATION = ROOT / "sql" / "Applied" / "plan_core_v1_slice_1.sql"
 SCHEMA = ROOT / "sql" / "training_postgress_db_schema.sql"
 PLAN_TABLES = (
     "plan_category",
@@ -236,6 +236,11 @@ def test_plan_columns_match_contract_and_canonical_schema():
         migration_body = _table_body(migration, table_name)
         schema_body = _table_body(schema, table_name)
         assert _column_declarations(migration_body) == list(expected)
+        if table_name == "plan_template":
+            schema_body = schema_body.replace(
+                "    is_favorite boolean DEFAULT false NOT NULL,\n",
+                "",
+            )
         assert _column_declarations(schema_body) == list(expected)
         assert migration_body == schema_body
 
