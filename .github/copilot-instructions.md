@@ -28,6 +28,221 @@ the worktree MUST be clean, no Git operation may be active, and local `HEAD`
 MUST equal freshly fetched `origin/main` exactly. Record the preflight and
 release hashes.
 
+## Session-Aware Documentation Policy
+
+Determine whether the current work is occurring in a fresh GHC session or a continuing GHC session.
+
+### Fresh session
+
+Before editing:
+
+1. Read this repository instruction file.
+2. Read only the directly relevant sections of the Engineering Constitution, Frontend Architecture, Testing Guide, and applicable ADRs.
+3. Run the required fresh-session Git synchronization gate.
+4. Do not broadly read unrelated documentation or source modules.
+
+A fresh session must establish enough authoritative context to work safely, but it must use targeted section reads rather than automatic whole-document reads.
+
+### Continuing session
+
+If the relevant governance documents were already read during the current GHC session and have not changed:
+
+- Reuse the established session context.
+- Do not reread unchanged governance documents.
+- Do not repeat the fresh-session architecture inventory.
+- Do not repeat broad source or documentation searches.
+- Do not reread documents merely because a new prompt was pasted into the same session.
+
+Reread a document only when:
+
+1. Git shows that the document changed since it was last read;
+2. the task reaches an unclear ownership, architecture, testing, security, data, or deployment boundary; or
+3. a test or live validation exposes an assumption that requires authoritative verification.
+
+When rereading is necessary, read only the relevant section rather than the complete document.
+
+### Session determination
+
+Use available conversation and tool history to determine whether the current GHC session already read the relevant documents.
+
+- If the current session history clearly shows that the documents were read, treat the session as continuing.
+- If the session is new, history is unavailable, or prior reads cannot be established confidently, treat the session as fresh.
+- Never rely on a persistent repository marker claiming that a prior session read the documents. Such a marker could become stale and cause a fresh session to skip required guidance.
+
+### Change detection
+
+When useful, check whether governance documents changed since the current session's starting commit with a narrow command equivalent to:
+
+```bash
+git diff --name-only <session-start-commit>..HEAD -- \
+  .github/copilot-instructions.md \
+  docs/ENGINEERING_CONSTITUTION.md \
+  docs/FRONTEND_ARCHITECTURE.md \
+  docs/TESTING_GUIDE.md \
+  docs/ARD
+```
+
+Adapt paths to the repository's actual structure. Do not run this command repeatedly when no relevant commit or document change occurred.
+
+### Prohibited context waste
+
+- No repeated whole-document reads in the same session.
+- No repeated whole-module reads after editing begins.
+- No broad architecture discovery after the implementation boundary is known.
+- No broad searches after editing begins unless a test exposes an unknown.
+- No rereading deployment documentation immediately before deployment when the current session already established the applicable process and the document has not changed.
+- No repeated full-suite execution unless source changed or repository policy explicitly requires another run.
+
+### Targeted-read rule
+
+When a document must be consulted:
+
+- search for the relevant heading or term first;
+- read the smallest useful line range;
+- expand once only if the first range is insufficient;
+- avoid reading an entire long document when one section answers the boundary question.
+
+## GHC Autonomy and Server-Safety Guardrails
+
+GHC should move approved work forward autonomously inside a clearly bounded scope. GHC must not turn a narrow defect, test failure, deployment issue, or server observation into an unapproved cleanup or redesign project.
+
+### Autonomy allowed without additional approval
+
+GHC may make a discovered fix without stopping for approval only when all of the following are true:
+
+1. The issue is concrete and directly blocks or invalidates the currently approved task.
+2. The fix is narrow, reversible, and within the same ownership boundary.
+3. The behavior can be proven with a deterministic test, parity check, syntax check, or read-only validation.
+4. The fix does not change production data, schema, security boundaries, lifecycle semantics, public API contracts, or product architecture.
+5. The fix does not create a new user-visible capability beyond the approved slice.
+6. The exact tested commit can be deployed and rolled back through the documented process.
+7. The change avoids unrelated cleanup and formatter churn.
+
+Examples of acceptable autonomous fixes:
+
+- excluding `.pytest_cache`, coverage files, or equivalent local test residue from deployment packaging when those files are clearly non-runtime artifacts;
+- correcting deployment-script parity when both documented deployment paths must package the same application content;
+- fixing a directly related stale asset-version check;
+- correcting a typo, selector, test fixture, or narrow lifecycle hook that directly prevents the approved feature from working;
+- adding a focused regression test for the discovered blocking defect.
+
+### Approval required before proceeding
+
+Stop and request a Product Owner decision when any of the following is true:
+
+1. Scope crosses into another repository unexpectedly.
+2. A schema, migration, SQL execution, or production-data mutation is required.
+3. A security, authentication, authorization, secret-management, or network boundary would change.
+4. A public API, persistence contract, lifecycle model, or architecture decision would change.
+5. Multiple materially different fixes are plausible and product behavior would differ.
+6. The proposed change adds, removes, or substantially alters user-visible behavior outside the approved slice.
+7. A deployment or rollback process requires redesign rather than repair.
+8. The proposed cleanup is useful but unrelated to the blocking issue.
+9. Production state is unknown, ambiguous, or cannot be verified safely.
+10. The change would cancel, delete, rewrite, backfill, or bulk-modify production records.
+11. Validation would require more production writes than the prompt explicitly authorized.
+12. The implementation would exceed the approved file, module, service, or repository boundary.
+
+### Mandatory stop conditions
+
+Stop immediately and report the evidence when:
+
+- the worktree is dirty, unexpectedly diverged, or an active Git operation exists;
+- the live or database state is unclear;
+- a test exposes a real unrelated defect;
+- two narrow patch attempts fail at the same ownership boundary;
+- formatter, generated-file, or dependency churn begins;
+- implementation would require architecture discovery after the approved boundary is already known;
+- repeated browser or test-harness retries are not producing new evidence;
+- the exact tested commit cannot be proven equal to the deployed commit;
+- a rollback point cannot be preserved;
+- actual, derived, financial, health, security, or other protected data could be changed unexpectedly.
+
+### Narrow-fix execution rule
+
+When an autonomous fix is allowed:
+
+1. State the concrete defect and why it blocks the approved task.
+2. Identify the smallest ownership boundary and exact files involved.
+3. Make no more than two narrow patch attempts at that boundary.
+4. Add or update the smallest deterministic regression test.
+5. Run focused validation first.
+6. Run complete required suites only after the final source change.
+7. Review the bounded diff and confirm no unrelated files changed.
+8. Include the discovered fix in the final Changed Files and deviation report.
+9. Do not use the fix as permission for adjacent cleanup.
+
+### Server and deployment guardrails
+
+GHC may inspect and validate server state through documented read-only commands, health checks, logs, asset metadata, container status, and documented deployment scripts.
+
+GHC may perform a documented, scoped application deployment or restart only when the prompt authorizes deployment and the exact tested commit is known.
+
+GHC must not, without explicit approval:
+
+- run ad hoc server cleanup commands;
+- delete caches, files, containers, images, volumes, or logs merely to make a symptom disappear;
+- change ownership, permissions, firewall rules, ports, secrets, environment variables, mounts, or service definitions;
+- use `sudo`, destructive shell commands, recursive deletion, force flags, or broad wildcard cleanup;
+- restart unrelated services;
+- deploy ETL, API, database, or other services outside the approved slice;
+- execute SQL, migrations, backfills, or data repair;
+- perform manual production edits that bypass the application's service boundary;
+- replace a documented deployment process with an improvised one.
+
+A scoped restart is allowed only when:
+
+- the documented application deployment requires it;
+- startup-derived asset or revision metadata is proven stale;
+- only the approved service is restarted;
+- health is verified afterward;
+- the restart and reason are documented in the completion report.
+
+### Production-write budget
+
+Production writes are prohibited unless the prompt explicitly authorizes them.
+
+When writes are authorized:
+
+- state the exact maximum number and type of writes before execution;
+- perform a read-before-write check;
+- use stable IDs, not weak title/date/content matching;
+- never exceed the authorized count;
+- verify the authoritative response;
+- perform a read-after-write check;
+- never use SQL cleanup to hide validation data unless explicitly approved;
+- keep application rollback separate from data rollback.
+
+### Test and browser retry budget
+
+- Prefer deterministic unit, contract, integration, and parity tests over repeated browser automation.
+- Use fresh, small browser scenarios.
+- Maximum two harness retries for the same browser interaction.
+- Do not change product code solely to satisfy a flaky synthetic browser gesture when manual behavior and deterministic contracts prove the product path.
+- Manual product behavior remains the acceptance gate for native drag, touch, browser, or device interactions that automation cannot reproduce reliably.
+- Do not rerun a complete suite when no source changed.
+
+### Unrelated improvement handling
+
+If GHC discovers a nonblocking improvement:
+
+1. Do not implement it during the current slice.
+2. Record it concisely in Risks, Deviations, or Follow-ups.
+3. Include the evidence, likely ownership, and recommended future slice or backlog location.
+4. Continue the approved task unless the finding creates a safety or correctness stop condition.
+
+### Completion-report requirement
+
+Every completion report involving an autonomous discovered fix must include:
+
+- the discovered issue;
+- why autonomous action was permitted;
+- the exact files changed;
+- the regression proof;
+- whether server, deployment, restart, or production actions occurred;
+- the tested commit and deployed commit;
+- any remaining risk or deferred cleanup.
+
 ## Project Overview
 
 This repo contains the ETL, data builders, database writers, schema SQL, Strava sync logic, weekly audit computation, and future service-log import work for the Training Dashboard.
