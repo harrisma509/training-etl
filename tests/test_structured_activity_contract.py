@@ -14,6 +14,30 @@ from db_writer import upsert_strava_activities
 
 
 class StructuredActivityNormalizationTests(unittest.TestCase):
+    def test_physical_therapy_uses_sport_type_and_preserves_source_fields(self):
+        row = normalize_activity({
+            "id": 123,
+            "sport_type": "PhysicalTherapy",
+            "type": "Workout",
+            "manual": True,
+            "moving_time": 1800,
+        })
+
+        self.assertEqual(row["activity_category"], "physical_therapy")
+        self.assertEqual(row["sport_type"], "PhysicalTherapy")
+        self.assertEqual(row["type"], "Workout")
+        self.assertIs(row["manual"], True)
+        self.assertEqual(row["moving_sec"], 1800)
+
+    def test_generic_workout_remains_strength(self):
+        row = normalize_activity({
+            "id": 124,
+            "sport_type": "Workout",
+            "type": "Workout",
+        })
+
+        self.assertEqual(row["activity_category"], "strength")
+
     def normalize_integer_field(self, field_name, value):
         return normalize_activity({"id": 123, field_name: value})[
             {

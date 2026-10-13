@@ -153,6 +153,9 @@ def classify_activity(activity):
     typ = activity_type.lower().replace(" ", "")
     name_l = name.lower()
 
+    if sport == "physicaltherapy":
+        return "physical_therapy"
+
     ride_types = {
         "ride",
         "mountainbikeride",

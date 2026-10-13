@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).parents[1]
-MIGRATION = ROOT / "sql" / "ai_coach_modes_v1_slice_1.sql"
+MIGRATION = ROOT / "sql" / "Applied" / "ai_coach_modes_v1_slice_1.sql"
 SCHEMA = ROOT / "sql" / "training_postgress_db_schema.sql"
 
 

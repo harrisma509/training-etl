@@ -33,6 +33,9 @@ def supplemental_load_for_other(row, rpe):
     if category == "mobility":
         return SUPP_MIN_MOBI * minutes
 
+    if category == "physical_therapy":
+        return minutes
+
     if category == "strength":
         return SUPP_MIN_MULT * minutes
 

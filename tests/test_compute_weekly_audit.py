@@ -9,11 +9,25 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from compute_weekly_audit import weekly_rows_for_audit
-from weekly_audit_rules import compute_load_item
+from weekly_audit_config import PREHAB_START_DATE
+from weekly_audit_rules import compute_load_item, compute_prehab_knee_item, compute_strength_core_item
 from weekly_audit_scoring import build_weekly_audit
 
 
 class WeeklyAuditCurrentEmptyWeekTests(unittest.TestCase):
+    def test_physical_therapy_is_not_counted_as_strength_or_prehab(self):
+        weekly_daily = [{
+            "date": PREHAB_START_DATE,
+            "activity_categories": "physical_therapy:1",
+            "other_activity_names": "Physical Therapy (physical_therapy)",
+        }]
+
+        strength_item = compute_strength_core_item(weekly_daily)
+        prehab_item = compute_prehab_knee_item(PREHAB_START_DATE, weekly_daily)
+
+        self.assertEqual(strength_item["evidence_json"]["strength_core_days"], 0)
+        self.assertEqual(prehab_item["evidence_json"].get("prehab_days", 0), 0)
+
     def test_open_zero_load_week_is_audited_with_existing_rules(self):
         as_of = date(2026, 10, 10)
         weekly_rows = {

@@ -9,6 +9,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from activity_utils import normalize_activity
 from daily_builder import build_daily_training
 from db_writer import upsert_daily_training
 
@@ -23,6 +24,71 @@ class DailyBuilderOtherActivitiesTests(unittest.TestCase):
     def tearDown(self):
         self.rpe_patcher.stop()
         self.hr_patcher.stop()
+
+    def test_physical_therapy_uses_moving_minutes_and_keeps_category_counts(self):
+        activity = normalize_activity({
+            "id": 401,
+            "name": "Physical Therapy",
+            "sport_type": "PhysicalTherapy",
+            "type": "Workout",
+            "moving_time": 1800,
+            "elapsed_time": 1800,
+            "start_date_local": "2024-04-01T09:00:00",
+        })
+
+        daily, warnings = build_daily_training([activity], "token", 10, gear_display_map={})
+        row = daily[0]
+
+        self.assertEqual(row["other_load"], 30)
+        self.assertEqual(row["total_load"], 30)
+        self.assertEqual(row["activity_categories"], "physical_therapy:1")
+        self.assertEqual(row["strength_count"], 0)
+        self.assertEqual(row["other_count"], 0)
+        self.assertEqual(row["other_activity_count"], 1)
+        self.assertEqual(
+            row["other_activities"],
+            [{"activity_id": "401", "name": "Physical Therapy", "activity_category": "physical_therapy"}],
+        )
+        self.assertEqual(row["other_activity_names"], "Physical Therapy (physical_therapy)")
+        self.assertEqual(warnings, [])
+
+    def test_physical_therapy_zero_or_missing_duration_has_zero_load(self):
+        for activity_id, moving_time in ((402, 0), (403, None)):
+            with self.subTest(moving_time=moving_time):
+                payload = {
+                    "id": activity_id,
+                    "name": "Physical Therapy",
+                    "sport_type": "PhysicalTherapy",
+                    "type": "Workout",
+                    "elapsed_time": 0,
+                    "start_date_local": "2024-04-01T09:00:00",
+                }
+                if moving_time is not None:
+                    payload["moving_time"] = moving_time
+
+                activity = normalize_activity(payload)
+                daily, _ = build_daily_training([activity], "token", 10, gear_display_map={})
+
+                self.assertEqual(activity["moving_sec"], 0)
+                self.assertEqual(daily[0]["other_load"], 0)
+                self.assertEqual(daily[0]["total_load"], 0)
+                self.assertEqual(daily[0]["other_activity_count"], 1)
+
+    def test_physical_therapy_load_rounds_half_up(self):
+        activity = normalize_activity({
+            "id": 404,
+            "name": "Physical Therapy",
+            "sport_type": "PhysicalTherapy",
+            "type": "Workout",
+            "moving_time": 30,
+            "elapsed_time": 30,
+            "start_date_local": "2024-04-01T09:00:00",
+        })
+
+        daily, _ = build_daily_training([activity], "token", 10, gear_display_map={})
+
+        self.assertEqual(daily[0]["other_load_raw"], 0.5)
+        self.assertEqual(daily[0]["other_load"], 1)
 
     def test_main_ride_plus_walk_keeps_main_ride_and_exposes_other_activities(self):
         rows = [

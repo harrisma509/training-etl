@@ -145,6 +145,30 @@ class ResyncActivityTests(unittest.TestCase):
         self.assertFalse(weekly_rebuilt)
         self.assertEqual(reason, "gear-only or metadata-only change")
 
+    def test_activity_category_change_triggers_training_impacting_rebuild(self):
+        old_row = {
+            "date_local": "2024-04-03",
+            "name": "Workout",
+            "sport_type": "Workout",
+            "activity_category": "strength",
+            "moving_sec": 1800,
+            "elapsed_sec": 1800,
+            "distance_mi": 0,
+            "elevation_ft": 0,
+            "has_heartrate": False,
+            "average_hr": None,
+            "max_hr": None,
+            "gear_id": None,
+        }
+        new_row = {**old_row, "sport_type": "PhysicalTherapy", "activity_category": "physical_therapy"}
+
+        changed_fields = classify_changed_fields(old_row, new_row)
+        weekly_rebuilt, reason = classify_weekly_rebuild(changed_fields)
+
+        self.assertEqual(changed_fields, ["sport_type", "activity_category"])
+        self.assertTrue(weekly_rebuilt)
+        self.assertEqual(reason, "training-impacting fields changed")
+
 
 if __name__ == "__main__":
     unittest.main()

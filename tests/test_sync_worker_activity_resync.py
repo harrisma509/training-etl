@@ -34,11 +34,14 @@ class SyncWorkerActivityResyncTests(unittest.TestCase):
             sync_worker, "mark_request_running"
         ), patch.object(sync_worker, "mark_request_completed") as completed, patch.object(
             sync_worker, "release_lock"
-        ), patch.object(sync_worker, "db_conn", return_value=conn):
+        ), patch.object(sync_worker, "db_conn", return_value=conn), patch.object(
+            sync_worker, "run_weekly_audit_recompute"
+        ) as audit_recompute:
             sync_worker.process_once()
 
         resync.assert_called_once_with(123)
         completed.assert_called_once_with(conn, 11, {"status": "success", "activity_id": 123})
+        audit_recompute.assert_not_called()
 
 
 if __name__ == "__main__":
