@@ -415,3 +415,103 @@ stop when evidence is green.
 - Default tests must not access paid providers, external services, production data, Docker, SSH, or deployment.
 - `rg` is available on Mike's Mac for focused repository searches. Use it when helpful, but fall back to `grep` or `find` rather than treating it as a required dependency.
 - Report exact commands and results.
+## SQL Change Lifecycle
+
+All new database changes must follow this lifecycle.
+
+### 1. Create pending SQL
+
+Create the new SQL change script in:
+
+`sql/`
+
+Do not create a new change directly in `sql/Applied/`.
+
+Do not modify an existing script in `sql/Applied/` to implement new behavior.
+
+The pending script must contain:
+
+- the smallest additive database change;
+- transaction boundaries where appropriate;
+- safe preconditions or idempotency only when justified;
+- column and object comments;
+- read-only verification queries at the end;
+- no unrelated schema cleanup.
+
+### 2. Validate before application
+
+Before asking the Product Owner to apply the script:
+
+- run focused static/schema tests;
+- compare the script with the authoritative schema artifact;
+- run `git diff --check`;
+- prove that only the intended pending SQL, schema artifact, and directly related tests changed;
+- do not claim that the migration is applied;
+- do not deploy application code that requires the new schema.
+
+### 3. Product Owner applies in DBeaver
+
+The Product Owner applies the pending script manually through DBeaver.
+
+GHC must provide a short operator handoff containing:
+
+- exact script path;
+- intended database;
+- expected changed object;
+- verification queries;
+- expected verification results;
+- rollback considerations.
+
+GHC must then stop and wait for the Product Owner to report the result.
+
+### 4. Verify the live schema
+
+After the Product Owner reports successful application:
+
+- use the supplied live DDL or approved read-only verification;
+- compare only the affected database object;
+- confirm that the live object matches the pending script;
+- do not inspect the full live schema unless the affected ownership boundary is unclear.
+
+### 5. Move the exact script to Applied
+
+Only after successful live verification:
+
+`sql/<change>.sql`
+→
+`sql/Applied/<change>.sql`
+
+The move must preserve the script contents exactly. Do not rewrite, expand, or combine the script while moving it.
+
+Update test paths if required so tests reference the script’s final governed location.
+
+### 6. Commit the applied state
+
+The final schema commit may include only:
+
+- the rename/move into `sql/Applied/`;
+- the authoritative schema artifact;
+- directly related schema tests;
+- necessary documentation of the verified live state.
+
+The completion report must distinguish:
+
+- pending script created;
+- Product Owner applied it;
+- live DDL verified;
+- exact script moved to Applied;
+- final commit and push completed.
+
+### Applied-script rule
+
+Files in `sql/Applied/` represent changes already applied to the live database.
+
+They may be disposable as execution artifacts, but their location is authoritative migration-state evidence.
+
+Never:
+
+- put an unapplied change directly in `sql/Applied/`;
+- assume a script was applied because it is located there;
+- modify an applied script to deliver a new schema change;
+- deploy schema-dependent application code before live verification;
+- recreate an old root-level script because a test points to its prior location.
