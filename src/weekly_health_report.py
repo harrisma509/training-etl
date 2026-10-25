@@ -296,7 +296,8 @@ def _parse_apt_upgrade_simulation(
 
     actions: list[bool | None] = []
     action_pattern = re.compile(
-        r"^\s*Inst\s+\S+(?:\s+\[[^\]]+\])?\s+\(([^()]*)\)\s*$"
+        r"^\s*Inst\s+\S+(?:\s+\[[^\]]+\])?\s+\(([^()]*)\)"
+        r"(?:\s+\[[^\[\]]*\])?\s*$"
     )
     for line in output.splitlines():
         if not re.match(r"^\s*Inst(?:\s|$)", line):
@@ -305,12 +306,16 @@ def _parse_apt_upgrade_simulation(
         if action is None:
             return None, None
 
-        ubuntu_origin = re.search(r"\bUbuntu:[^\s\]]+", action.group(1), re.IGNORECASE)
-        if ubuntu_origin is None or "/" not in ubuntu_origin.group(0):
+        ubuntu_origins = re.findall(
+            r"\bUbuntu:[^\s\]]+",
+            action.group(1),
+            re.IGNORECASE,
+        )
+        if len(ubuntu_origins) != 1 or "/" not in ubuntu_origins[0]:
             actions.append(None)
             continue
 
-        archive = ubuntu_origin.group(0).split("/", 1)[1]
+        archive = ubuntu_origins[0].split("/", 1)[1]
         is_security = any(
             component.lower().endswith("-security")
             for component in archive.split("/")

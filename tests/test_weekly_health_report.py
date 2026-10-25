@@ -52,8 +52,16 @@ Inst libc6 [2.39-0ubuntu8.4] (2.39-0ubuntu8.5 Ubuntu:24.04/noble-updates [amd64]
 
 MIXED_UPGRADES = """\
 Inst curl [8.5.0-2ubuntu10.2] (8.5.0-2ubuntu10.3 Ubuntu:24.04/noble-updates [amd64])
-Inst openssl [3.0.13-0ubuntu3.4] (3.0.13-0ubuntu3.5 Ubuntu:24.04/noble-security [amd64])
+Inst openssl [3.0.13-0ubuntu3.4] (3.0.13-0ubuntu3.5 Ubuntu:24.04/noble-security [amd64]) []
 2 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.
+"""
+
+LIVE_UBUNTU_26_04_OUTPUT = """\
+2 upgraded, 0 newly installed, 0 to remove and 2 not upgraded.
+Inst ubuntu-pro-client-l10n [37.2ubuntu0.1] (38ubuntu0~26.04 Ubuntu:26.04/resolute-updates [amd64]) []
+Inst ubuntu-pro-client [37.2ubuntu0.1] (38ubuntu0~26.04 Ubuntu:26.04/resolute-updates [amd64])
+Conf ubuntu-pro-client-l10n (38ubuntu0~26.04 Ubuntu:26.04/resolute-updates [amd64]) []
+Conf ubuntu-pro-client (38ubuntu0~26.04 Ubuntu:26.04/resolute-updates [amd64])
 """
 
 
@@ -71,6 +79,18 @@ class AptSimulationParsingTests(unittest.TestCase):
         self.assertEqual(
             report._parse_apt_upgrade_simulation(MIXED_UPGRADES),
             (2, 1),
+        )
+
+    def test_live_ubuntu_26_04_output_counts_two_ordinary_upgrades(self):
+        self.assertEqual(
+            report._parse_apt_upgrade_simulation(LIVE_UBUNTU_26_04_OUTPUT),
+            (2, 0),
+        )
+
+    def test_not_upgraded_phased_packages_are_not_counted(self):
+        self.assertEqual(
+            report._parse_apt_upgrade_simulation(LIVE_UBUNTU_26_04_OUTPUT),
+            (2, 0),
         )
 
     def test_summary_prose_does_not_create_package_actions(self):
@@ -105,6 +125,29 @@ Inst local-package [1] (2 [amd64])
             report._parse_apt_upgrade_simulation(output),
             (1, None),
         )
+
+    def test_ambiguous_ubuntu_archive_metadata_has_unknown_security_status(self):
+        output = """\
+Inst package [1] (2 Ubuntu:26.04/resolute-updates Ubuntu:26.04/resolute-security [amd64])
+1 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.
+"""
+        self.assertEqual(
+            report._parse_apt_upgrade_simulation(output),
+            (1, None),
+        )
+
+    def test_malformed_trailing_annotation_is_unavailable(self):
+        for annotation in (" [", " []]", " [] extra"):
+            output = (
+                "Inst package [1] "
+                f"(2 Ubuntu:26.04/resolute-updates [amd64]){annotation}\n"
+                "1 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n"
+            )
+            with self.subTest(annotation=annotation):
+                self.assertEqual(
+                    report._parse_apt_upgrade_simulation(output),
+                    (None, None),
+                )
 
 
 class OSMaintenanceCollectionTests(unittest.TestCase):
@@ -168,6 +211,14 @@ class OSMaintenanceCollectionTests(unittest.TestCase):
 
     def test_ordinary_upgrades_remain_informational(self):
         result, _, _ = self.collect(output=ORDINARY_UPGRADES)
+        self.assertFalse(result.requires_attention)
+        self.assertEqual(result.section.lines[2:4], [
+            "Upgradeable packages: 2",
+            "Security updates: 0",
+        ])
+
+    def test_live_ordinary_updates_do_not_require_attention(self):
+        result, _, _ = self.collect(output=LIVE_UBUNTU_26_04_OUTPUT)
         self.assertFalse(result.requires_attention)
         self.assertEqual(result.section.lines[2:4], [
             "Upgradeable packages: 2",
