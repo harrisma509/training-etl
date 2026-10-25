@@ -11,6 +11,8 @@ import argparse
 import json
 import logging
 import os
+import re
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -32,6 +34,7 @@ DEFAULT_SYNC_MAX_AGE_HOURS = 3.0
 DEFAULT_BACKUP_MAX_AGE_HOURS = 26.0
 DEFAULT_DISK_WARNING_PERCENT = 85.0
 DEFAULT_DISK_CRITICAL_PERCENT = 95.0
+APT_UPGRADE_TIMEOUT_SECONDS = 120
 
 logger = logging.getLogger("harrisserver.weekly")
 
@@ -40,6 +43,12 @@ logger = logging.getLogger("harrisserver.weekly")
 class SummarySection:
     title: str
     lines: list[str]
+
+
+@dataclass
+class OSMaintenanceResult:
+    section: SummarySection
+    requires_attention: bool
 
 
 @dataclass
@@ -243,6 +252,144 @@ def collect_platform_section(health_results: list[Any]) -> SummarySection:
     )
 
 
+def _read_os_release(path: Path) -> str:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return "Unavailable"
+
+    for line in content.splitlines():
+        if not line.lstrip().startswith("PRETTY_NAME="):
+            continue
+        try:
+            values = shlex.split(line, comments=True, posix=True)
+        except ValueError:
+            return "Unavailable"
+        if len(values) != 1 or not values[0].startswith("PRETTY_NAME="):
+            return "Unavailable"
+        value = values[0].split("=", 1)[1]
+        return value or "Unavailable"
+    return "Unavailable"
+
+
+def _read_running_kernel() -> str:
+    try:
+        return os.uname().release or "Unavailable"
+    except (AttributeError, OSError):
+        return "Unavailable"
+
+
+def _parse_apt_upgrade_simulation(
+    output: str,
+) -> tuple[int | None, int | None]:
+    summary_pattern = re.compile(
+        r"^\s*(\d+) upgraded, (\d+) newly installed, "
+        r"(\d+) to remove and (\d+) not upgraded\.\s*$"
+    )
+    summaries = [
+        match
+        for line in output.splitlines()
+        if (match := summary_pattern.fullmatch(line))
+    ]
+    if len(summaries) != 1:
+        return None, None
+
+    actions: list[bool | None] = []
+    action_pattern = re.compile(
+        r"^\s*Inst\s+\S+(?:\s+\[[^\]]+\])?\s+\(([^()]*)\)\s*$"
+    )
+    for line in output.splitlines():
+        if not re.match(r"^\s*Inst(?:\s|$)", line):
+            continue
+        action = action_pattern.fullmatch(line)
+        if action is None:
+            return None, None
+
+        ubuntu_origin = re.search(r"\bUbuntu:[^\s\]]+", action.group(1), re.IGNORECASE)
+        if ubuntu_origin is None or "/" not in ubuntu_origin.group(0):
+            actions.append(None)
+            continue
+
+        archive = ubuntu_origin.group(0).split("/", 1)[1]
+        is_security = any(
+            component.lower().endswith("-security")
+            for component in archive.split("/")
+        )
+        actions.append(is_security)
+
+    summary = summaries[0]
+    expected_actions = int(summary.group(1)) + int(summary.group(2))
+    if len(actions) != expected_actions:
+        return None, None
+
+    security_count = (
+        sum(action is True for action in actions)
+        if all(action is not None for action in actions)
+        else None
+    )
+    return len(actions), security_count
+
+
+def _read_reboot_required(path: Path) -> tuple[str, bool]:
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return "No", False
+    except OSError:
+        return "Unavailable", True
+    return "Yes", True
+
+
+def collect_os_maintenance_section(
+    os_release_path: Path = Path("/etc/os-release"),
+    reboot_required_path: Path = Path("/var/run/reboot-required"),
+) -> OSMaintenanceResult:
+    os_release = _read_os_release(os_release_path)
+    kernel = _read_running_kernel()
+
+    try:
+        apt_get = require_command("apt-get")
+        result = run_command(
+            [apt_get, "-s", "upgrade"],
+            timeout=APT_UPGRADE_TIMEOUT_SECONDS,
+        )
+        if result.returncode == 0:
+            upgradeable_count, security_count = _parse_apt_upgrade_simulation(
+                result.stdout
+            )
+        else:
+            upgradeable_count, security_count = None, None
+    except (OSError, RuntimeError, subprocess.TimeoutExpired):
+        upgradeable_count, security_count = None, None
+
+    reboot_status, reboot_attention = _read_reboot_required(reboot_required_path)
+    requires_attention = (
+        upgradeable_count is None
+        or security_count is None
+        or security_count > 0
+        or reboot_attention
+    )
+    section = SummarySection(
+        "OS maintenance",
+        [
+            f"OS release: {os_release}",
+            f"Running kernel: {kernel}",
+            f"Upgradeable packages: {upgradeable_count if upgradeable_count is not None else 'Unavailable'}",
+            f"Security updates: {security_count if security_count is not None else 'Unavailable'}",
+            f"Reboot required: {reboot_status}",
+        ],
+    )
+    return OSMaintenanceResult(section, requires_attention)
+
+
+def build_subject(overall: str) -> str:
+    return (
+        "Harris Server Weekly Health: Healthy"
+        if overall == "HEALTHY"
+        else "Harris Server Weekly Health: Attention Needed"
+    )
+
+
 def collect_incident_section(manager: AlertManager) -> SummarySection:
     try:
         active = manager.list_active()
@@ -326,7 +473,14 @@ def main() -> int:
         health_results = collect_checks(health_arguments)
         active_incidents = manager.list_active()
         failed_checks = [result for result in health_results if not result.healthy]
-        overall = "HEALTHY" if not failed_checks and not active_incidents else "ATTENTION NEEDED"
+        os_maintenance = collect_os_maintenance_section()
+        overall = (
+            "HEALTHY"
+            if not failed_checks
+            and not active_incidents
+            and not os_maintenance.requires_attention
+            else "ATTENTION NEEDED"
+        )
         hostname = subprocess.run(
             ["hostname"],
             text=True,
@@ -336,6 +490,7 @@ def main() -> int:
 
         sections = [
             collect_platform_section(health_results),
+            os_maintenance.section,
             collect_postgresql_section(),
             collect_sync_section(),
             collect_health_freshness_section(),
@@ -343,11 +498,7 @@ def main() -> int:
             collect_incident_section(manager),
         ]
         report = render_report(hostname, overall, sections)
-        subject = (
-            "Harris Server Weekly Health: Healthy"
-            if overall == "HEALTHY"
-            else f"Harris Server Weekly Health: Attention Needed ({len(failed_checks)} failed checks, {len(active_incidents)} active incidents)"
-        )
+        subject = build_subject(overall)
 
         if arguments.dry_run:
             print(report)
