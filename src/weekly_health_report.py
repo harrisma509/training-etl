@@ -35,6 +35,14 @@ DEFAULT_BACKUP_MAX_AGE_HOURS = 26.0
 DEFAULT_DISK_WARNING_PERCENT = 85.0
 DEFAULT_DISK_CRITICAL_PERCENT = 95.0
 APT_UPGRADE_TIMEOUT_SECONDS = 120
+FWUPDMGR_TIMEOUT_SECONDS = 120
+FWUPD_URGENCY_RANK = {
+    "unknown": 0,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "critical": 4,
+}
 
 logger = logging.getLogger("harrisserver.weekly")
 
@@ -50,6 +58,14 @@ class OSMaintenanceResult:
     section: SummarySection
     requires_attention: bool
     status_available: bool
+
+
+@dataclass(frozen=True)
+class FirmwareUpdateSummary:
+    target_count: int
+    highest_urgency: str
+    reboot_required: bool
+    shutdown_required: bool
 
 
 @dataclass
@@ -378,6 +394,107 @@ def _read_reboot_required(path: Path) -> tuple[str, bool]:
     return "Yes", True
 
 
+def _parse_fwupd_get_updates(output: str) -> FirmwareUpdateSummary | None:
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or not isinstance(payload.get("Devices"), list):
+        return None
+
+    targets: dict[str, tuple[int, bool, bool]] = {}
+    for device in payload["Devices"]:
+        if not isinstance(device, dict):
+            return None
+        device_id = device.get("DeviceId")
+        releases = device.get("Releases")
+        flags = device.get("Flags", [])
+        if (
+            not isinstance(device_id, str)
+            or not device_id.strip()
+            or not isinstance(releases, list)
+            or not releases
+            or not isinstance(flags, list)
+            or not all(isinstance(flag, str) for flag in flags)
+        ):
+            return None
+
+        urgency_rank = 0
+        for release in releases:
+            if not isinstance(release, dict):
+                return None
+            urgency = release.get("Urgency", "unknown")
+            if not isinstance(urgency, str):
+                return None
+            urgency = urgency.casefold()
+            if urgency not in FWUPD_URGENCY_RANK:
+                return None
+            urgency_rank = max(urgency_rank, FWUPD_URGENCY_RANK[urgency])
+
+        target_key = device_id.strip().casefold()
+        previous_rank, previous_reboot, previous_shutdown = targets.get(
+            target_key,
+            (0, False, False),
+        )
+        targets[target_key] = (
+            max(previous_rank, urgency_rank),
+            previous_reboot or "needs-reboot" in flags,
+            previous_shutdown or "needs-shutdown" in flags,
+        )
+
+    highest_rank = max((target[0] for target in targets.values()), default=0)
+    highest_urgency = next(
+        urgency
+        for urgency, rank in FWUPD_URGENCY_RANK.items()
+        if rank == highest_rank
+    )
+    return FirmwareUpdateSummary(
+        target_count=len(targets),
+        highest_urgency=highest_urgency,
+        reboot_required=any(target[1] for target in targets.values()),
+        shutdown_required=any(target[2] for target in targets.values()),
+    )
+
+
+def _collect_fwupd_updates() -> FirmwareUpdateSummary | None:
+    try:
+        fwupdmgr = require_command("fwupdmgr")
+        result = run_command(
+            [fwupdmgr, "get-updates", "--json"],
+            timeout=FWUPDMGR_TIMEOUT_SECONDS,
+        )
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+        logger.warning("Firmware update status unavailable: %s", type(error).__name__)
+        return None
+
+    if result.returncode != 0:
+        logger.warning(
+            "Firmware update status unavailable: fwupdmgr exited with status %s",
+            result.returncode,
+        )
+        return None
+
+    summary = _parse_fwupd_get_updates(result.stdout)
+    if summary is None:
+        logger.warning("Firmware update status unavailable: unexpected fwupdmgr JSON")
+    return summary
+
+
+def _format_fwupd_updates(summary: FirmwareUpdateSummary | None) -> str:
+    if summary is None:
+        return "Firmware updates: Unavailable"
+    if summary.target_count == 0:
+        return "Firmware updates: 0"
+
+    details = [
+        f"highest urgency: {summary.highest_urgency.title()}",
+        f"reboot after install: {'Yes' if summary.reboot_required else 'No'}",
+    ]
+    if summary.shutdown_required:
+        details.append("shutdown after install: Yes")
+    return f"Firmware updates: {summary.target_count} ({'; '.join(details)})"
+
+
 def collect_os_maintenance_section(
     os_release_path: Path = Path("/etc/os-release"),
     reboot_required_path: Path = Path("/var/run/reboot-required"),
@@ -401,16 +518,20 @@ def collect_os_maintenance_section(
         upgradeable_count, security_count = None, None
 
     reboot_status, reboot_attention = _read_reboot_required(reboot_required_path)
+    firmware_updates = _collect_fwupd_updates()
     requires_attention = (
         upgradeable_count is None
         or security_count is None
         or security_count > 0
         or reboot_attention
+        or firmware_updates is None
+        or firmware_updates.target_count > 0
     )
     status_available = (
         upgradeable_count is not None
         and security_count is not None
         and reboot_status != "Unavailable"
+        and firmware_updates is not None
     )
     section = SummarySection(
         "OS maintenance",
@@ -419,6 +540,7 @@ def collect_os_maintenance_section(
             f"Running kernel: {kernel}",
             f"Upgradeable packages: {upgradeable_count if upgradeable_count is not None else 'Unavailable'}",
             f"Security updates: {security_count if security_count is not None else 'Unavailable'}",
+            _format_fwupd_updates(firmware_updates),
             f"Reboot required: {reboot_status}",
         ],
     )

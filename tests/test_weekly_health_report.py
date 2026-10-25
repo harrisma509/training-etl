@@ -1,4 +1,5 @@
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -63,6 +64,23 @@ Inst ubuntu-pro-client [37.2ubuntu0.1] (38ubuntu0~26.04 Ubuntu:26.04/resolute-up
 Conf ubuntu-pro-client-l10n (38ubuntu0~26.04 Ubuntu:26.04/resolute-updates [amd64]) []
 Conf ubuntu-pro-client (38ubuntu0~26.04 Ubuntu:26.04/resolute-updates [amd64])
 """
+
+FWUPD_NO_UPDATES = '{"Devices":[]}'
+FWUPD_DBX_UPDATES = json.dumps(
+    {
+        "Devices": [
+            {
+                "DeviceId": "UEFI-dbX-target",
+                "Flags": ["needs-reboot"],
+                "Releases": [
+                    {"Version": "2024", "Urgency": "low"},
+                    {"Version": "2025", "Urgency": "high"},
+                    {"Version": "2026", "Urgency": "medium"},
+                ],
+            }
+        ]
+    }
+)
 
 
 class AptSimulationParsingTests(unittest.TestCase):
@@ -165,20 +183,38 @@ class OSMaintenanceCollectionTests(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def collect(self, output=NO_UPGRADES, returncode=0):
+    def collect(
+        self,
+        output=NO_UPGRADES,
+        returncode=0,
+        firmware_output=FWUPD_NO_UPDATES,
+        firmware_returncode=0,
+        fwupd_command_unavailable=False,
+        fwupd_timeout=False,
+    ):
+        def require_command(name):
+            if name == "apt-get":
+                return "/usr/bin/apt-get"
+            if name == "fwupdmgr" and not fwupd_command_unavailable:
+                return "/usr/bin/fwupdmgr"
+            raise RuntimeError(f"{name} unavailable")
+
+        def execute(command, timeout=20):
+            if command[0] == "/usr/bin/apt-get":
+                return CompletedProcess(command, returncode, output, "")
+            if fwupd_timeout:
+                raise TimeoutExpired(command, timeout)
+            return CompletedProcess(
+                command,
+                firmware_returncode,
+                firmware_output,
+                "",
+            )
+
         with (
             patch.object(report.os, "uname", return_value=self.kernel, create=True),
-            patch.object(report, "require_command", return_value="/usr/bin/apt-get") as required,
-            patch.object(
-                report,
-                "run_command",
-                return_value=CompletedProcess(
-                    args=["/usr/bin/apt-get", "-s", "upgrade"],
-                    returncode=returncode,
-                    stdout=output,
-                    stderr="",
-                ),
-            ) as run,
+            patch.object(report, "require_command", side_effect=require_command) as required,
+            patch.object(report, "run_command", side_effect=execute) as run,
         ):
             result = report.collect_os_maintenance_section(
                 self.os_release_path,
@@ -201,14 +237,129 @@ class OSMaintenanceCollectionTests(unittest.TestCase):
                 "Running kernel: 6.8.0-86-generic",
                 "Upgradeable packages: 0",
                 "Security updates: 0",
+                "Firmware updates: 0",
                 "Reboot required: No",
             ],
         )
-        required.assert_called_once_with("apt-get")
-        run.assert_called_once_with(
+        self.assertEqual(
+            [call.args[0] for call in required.call_args_list],
+            ["apt-get", "fwupdmgr"],
+        )
+        self.assertEqual(run.call_count, 2)
+        run.assert_any_call(
             ["/usr/bin/apt-get", "-s", "upgrade"],
             timeout=report.APT_UPGRADE_TIMEOUT_SECONDS,
         )
+        run.assert_any_call(
+            ["/usr/bin/fwupdmgr", "get-updates", "--json"],
+            timeout=report.FWUPDMGR_TIMEOUT_SECONDS,
+        )
+
+    def test_fwupd_multiple_releases_count_once_and_report_highest_urgency(self):
+        result, _, _ = self.collect(firmware_output=FWUPD_DBX_UPDATES)
+        self.assertTrue(result.requires_attention)
+        self.assertTrue(result.status_available)
+        self.assertEqual(
+            result.section.lines[4],
+            "Firmware updates: 1 (highest urgency: High; reboot after install: Yes)",
+        )
+        self.assertEqual(result.section.lines[5], "Reboot required: No")
+        self.assertEqual(
+            report._os_maintenance_dashboard_line(result),
+            "⚠ ATTENTION: OS maintenance requires attention",
+        )
+
+    def test_low_urgency_fwupd_update_requires_attention(self):
+        firmware_output = json.dumps(
+            {
+                "Devices": [
+                    {
+                        "DeviceId": "low-urgency-device",
+                        "Releases": [{"Version": "1.0", "Urgency": "low"}],
+                    }
+                ]
+            }
+        )
+        result, _, _ = self.collect(firmware_output=firmware_output)
+        self.assertTrue(result.requires_attention)
+        self.assertTrue(result.status_available)
+        self.assertEqual(
+            result.section.lines[4],
+            "Firmware updates: 1 (highest urgency: Low; reboot after install: No)",
+        )
+        self.assertEqual(result.section.lines[5], "Reboot required: No")
+
+    def test_fwupd_shutdown_requirement_is_reported_in_firmware_detail(self):
+        firmware_output = json.dumps(
+            {
+                "Devices": [
+                    {
+                        "DeviceId": "shutdown-device",
+                        "Flags": ["needs-shutdown"],
+                        "Releases": [{"Version": "1.0", "Urgency": "medium"}],
+                    }
+                ]
+            }
+        )
+        result, _, _ = self.collect(firmware_output=firmware_output)
+        self.assertTrue(result.requires_attention)
+        self.assertEqual(
+            result.section.lines[4],
+            "Firmware updates: 1 (highest urgency: Medium; reboot after install: No; shutdown after install: Yes)",
+        )
+
+    def test_fwupd_command_and_output_failures_are_unavailable(self):
+        scenarios = [
+            ("missing command", {"fwupd_command_unavailable": True}),
+            ("timeout", {"fwupd_timeout": True}),
+            ("nonzero exit", {"firmware_returncode": 1}),
+            ("malformed JSON", {"firmware_output": "not JSON"}),
+            ("missing Devices", {"firmware_output": "{}"}),
+            ("invalid device", {"firmware_output": '{"Devices":[{}]}'}),
+            (
+                "invalid urgency",
+                {
+                    "firmware_output": json.dumps(
+                        {
+                            "Devices": [
+                                {
+                                    "DeviceId": "invalid-urgency",
+                                    "Releases": [
+                                        {"Version": "1.0", "Urgency": "urgent"}
+                                    ],
+                                }
+                            ]
+                        }
+                    )
+                },
+            ),
+            (
+                "invalid flags",
+                {
+                    "firmware_output": json.dumps(
+                        {
+                            "Devices": [
+                                {
+                                    "DeviceId": "invalid-flags",
+                                    "Flags": "needs-reboot",
+                                    "Releases": [{"Version": "1.0"}],
+                                }
+                            ]
+                        }
+                    )
+                },
+            ),
+        ]
+        for name, options in scenarios:
+            with self.subTest(name=name):
+                result, _, _ = self.collect(**options)
+                self.assertTrue(result.requires_attention)
+                self.assertFalse(result.status_available)
+                self.assertEqual(result.section.lines[4], "Firmware updates: Unavailable")
+                self.assertEqual(
+                    report._os_maintenance_dashboard_line(result),
+                    "❌ FAIL: OS maintenance status could not be determined",
+                )
 
     def test_ordinary_upgrades_remain_informational(self):
         result, _, _ = self.collect(output=ORDINARY_UPGRADES)
@@ -263,6 +414,17 @@ class OSMaintenanceCollectionTests(unittest.TestCase):
         self.assertEqual(malformed, "Unavailable")
 
     def test_unavailable_kernel_is_rendered_without_attention_by_itself(self):
+        def require_command(name):
+            return (
+                "/usr/bin/apt-get"
+                if name == "apt-get"
+                else "/usr/bin/fwupdmgr"
+            )
+
+        def execute(command, timeout=20):
+            output = NO_UPGRADES if command[0] == "/usr/bin/apt-get" else FWUPD_NO_UPDATES
+            return CompletedProcess(command, 0, output, "")
+
         with (
             patch.object(
                 report.os,
@@ -270,12 +432,8 @@ class OSMaintenanceCollectionTests(unittest.TestCase):
                 side_effect=OSError("not available"),
                 create=True,
             ),
-            patch.object(report, "require_command", return_value="/usr/bin/apt-get"),
-            patch.object(
-                report,
-                "run_command",
-                return_value=CompletedProcess([], 0, NO_UPGRADES, ""),
-            ),
+            patch.object(report, "require_command", side_effect=require_command),
+            patch.object(report, "run_command", side_effect=execute),
         ):
             result = report.collect_os_maintenance_section(
                 self.os_release_path,
@@ -470,6 +628,7 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
                     "Running kernel: 6.8.0-86-generic",
                     "Upgradeable packages: 2",
                     "Security updates: 0",
+                    "Firmware updates: 0",
                     "Reboot required: No",
                 ],
             ),
@@ -500,6 +659,7 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
                     "Running kernel: 6.8.0-86-generic",
                     "Upgradeable packages: 2",
                     "Security updates: 1",
+                    "Firmware updates: 0",
                     "Reboot required: Yes",
                 ],
             ),
@@ -519,6 +679,43 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
             send_alert.call_args.kwargs["subject"],
             "Harris Server Weekly Health: Attention Needed",
         )
+
+    def test_firmware_updates_require_attention_in_the_existing_dashboard_line(self):
+        maintenance = report.OSMaintenanceResult(
+            report.SummarySection(
+                "OS maintenance",
+                [
+                    "Security updates: 0",
+                    "Firmware updates: 1 (highest urgency: High; reboot after install: Yes)",
+                    "Reboot required: No",
+                ],
+            ),
+            True,
+            True,
+        )
+        exit_code, body, send_alert = self.run_main(maintenance)
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Overall: ATTENTION NEEDED", body)
+        self.assertEqual(
+            body.count("⚠ ATTENTION: OS maintenance requires attention"),
+            1,
+        )
+        self.assertEqual(
+            body.count(
+                "- Firmware updates: 1 (highest urgency: High; reboot after install: Yes)"
+            ),
+            1,
+        )
+        self.assertNotIn("\nFirmware\n", body)
+        self.assertLess(
+            body.index("✅ PASS: Container training-runner is running"),
+            body.index("⚠ ATTENTION: OS maintenance requires attention"),
+        )
+        self.assertLess(
+            body.index("⚠ ATTENTION: OS maintenance requires attention"),
+            body.index("✅ PASS: HarrisNAS backup mount is available"),
+        )
+        send_alert.assert_not_called()
 
     def test_email_path_uses_exact_attention_subject(self):
         maintenance = report.OSMaintenanceResult(
@@ -571,6 +768,7 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
                     "Running kernel: 7.0.0-38-generic",
                     "Upgradeable packages: Unavailable",
                     "Security updates: Unavailable",
+                    "Firmware updates: Unavailable",
                     "Reboot required: No",
                 ],
             ),
@@ -590,7 +788,10 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
 
     def test_platform_failure_and_active_incident_still_require_attention(self):
         maintenance = report.OSMaintenanceResult(
-            report.SummarySection("OS maintenance", ["Security updates: 0"]),
+            report.SummarySection(
+                "OS maintenance",
+                ["Security updates: 0", "Firmware updates: 0"],
+            ),
             False,
             True,
         )

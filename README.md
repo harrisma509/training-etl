@@ -309,12 +309,16 @@ The report includes:
 - newest backup name, age, size, and retained backup count
 - latest recorded restore-validation result
 - active incidents from `alert_state.json`
-- OS release, running kernel, upgradeable package count, security-update count, and reboot-required state
+- OS release, running kernel, upgradeable package count, security-update count,
+  firmware update targets and urgency, firmware post-install reboot/shutdown
+  requirements, and the operating-system reboot-required state
 
-Security updates or a required reboot set the overall status to `ATTENTION NEEDED`;
-ordinary non-security upgrades are informational. Package status uses the
-server's existing APT metadata and a simulated upgrade only; the report does
-not refresh package indexes, install updates, or reboot the server.
+Security updates, pending firmware updates, or a required operating-system
+reboot set the overall status to `ATTENTION NEEDED`; ordinary non-security
+upgrades are informational. Package status uses the server's existing APT
+metadata and a simulated upgrade only. Firmware status uses
+`fwupdmgr get-updates --json`. The report does not install updates or reboot
+the server.
 
 The weekly report observes current health but does not open or recover incidents. The hourly health checker owns incident lifecycle.
 
