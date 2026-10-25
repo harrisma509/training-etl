@@ -299,7 +299,7 @@ sudo /opt/training/etl/weekly_health_report.py
 The report includes:
 
 - overall `HEALTHY` or `ATTENTION NEEDED` status
-- `✅ PASS` and `❌ FAIL` platform-health lines
+- platform-health checks and OS maintenance status (`✅ PASS`, `⚠ ATTENTION`, or `❌ FAIL`); detailed OS values remain below
 - PostgreSQL version and database size
 - Activities, Daily, and Weekly row counts
 - successful and non-OK sync runs during the last seven days

@@ -49,6 +49,7 @@ class SummarySection:
 class OSMaintenanceResult:
     section: SummarySection
     requires_attention: bool
+    status_available: bool
 
 
 @dataclass
@@ -242,14 +243,46 @@ def collect_backup_section(backup_dir: Path, restore_log: Path) -> SummarySectio
     return SummarySection("Backups and recovery", lines)
 
 
-def collect_platform_section(health_results: list[Any]) -> SummarySection:
+def collect_platform_section(
+    health_results: list[Any],
+    os_maintenance: OSMaintenanceResult,
+) -> SummarySection:
+    lines = [
+        f"{'✅ PASS' if result.healthy else '❌ FAIL'}: {result.summary}"
+        for result in health_results
+    ]
+    runner_index = next(
+        (
+            index
+            for index, result in enumerate(health_results)
+            if result.key == "container_training_runner_stopped"
+        ),
+        None,
+    )
+    if runner_index is not None:
+        insertion_index = runner_index + 1
+    else:
+        insertion_index = next(
+            (
+                index
+                for index, result in enumerate(health_results)
+                if result.key == "harrisnas_mount_missing"
+            ),
+            len(lines),
+        )
+    lines.insert(insertion_index, _os_maintenance_dashboard_line(os_maintenance))
     return SummarySection(
         "Platform health",
-        [
-            f"{'✅ PASS' if result.healthy else '❌ FAIL'}: {result.summary}"
-            for result in health_results
-        ],
+        lines,
     )
+
+
+def _os_maintenance_dashboard_line(result: OSMaintenanceResult) -> str:
+    if not result.status_available:
+        return "❌ FAIL: OS maintenance status could not be determined"
+    if result.requires_attention:
+        return "⚠ ATTENTION: OS maintenance requires attention"
+    return "✅ PASS: OS maintenance is current"
 
 
 def _read_os_release(path: Path) -> str:
@@ -374,6 +407,11 @@ def collect_os_maintenance_section(
         or security_count > 0
         or reboot_attention
     )
+    status_available = (
+        upgradeable_count is not None
+        and security_count is not None
+        and reboot_status != "Unavailable"
+    )
     section = SummarySection(
         "OS maintenance",
         [
@@ -384,7 +422,7 @@ def collect_os_maintenance_section(
             f"Reboot required: {reboot_status}",
         ],
     )
-    return OSMaintenanceResult(section, requires_attention)
+    return OSMaintenanceResult(section, requires_attention, status_available)
 
 
 def build_subject(overall: str) -> str:
@@ -494,7 +532,7 @@ def main() -> int:
         ).stdout.strip() or "harrisserver"
 
         sections = [
-            collect_platform_section(health_results),
+            collect_platform_section(health_results, os_maintenance),
             os_maintenance.section,
             collect_postgresql_section(),
             collect_sync_section(),

@@ -193,6 +193,7 @@ class OSMaintenanceCollectionTests(unittest.TestCase):
     def test_healthy_zero_upgrade_state_and_metadata(self):
         result, required, run = self.collect()
         self.assertFalse(result.requires_attention)
+        self.assertTrue(result.status_available)
         self.assert_lines(
             result,
             [
@@ -220,6 +221,11 @@ class OSMaintenanceCollectionTests(unittest.TestCase):
     def test_live_ordinary_updates_do_not_require_attention(self):
         result, _, _ = self.collect(output=LIVE_UBUNTU_26_04_OUTPUT)
         self.assertFalse(result.requires_attention)
+        self.assertTrue(result.status_available)
+        self.assertEqual(
+            report._os_maintenance_dashboard_line(result),
+            "✅ PASS: OS maintenance is current",
+        )
         self.assertEqual(result.section.lines[2:4], [
             "Upgradeable packages: 2",
             "Security updates: 0",
@@ -228,6 +234,11 @@ class OSMaintenanceCollectionTests(unittest.TestCase):
     def test_security_updates_require_attention(self):
         result, _, _ = self.collect(output=MIXED_UPGRADES)
         self.assertTrue(result.requires_attention)
+        self.assertTrue(result.status_available)
+        self.assertEqual(
+            report._os_maintenance_dashboard_line(result),
+            "⚠ ATTENTION: OS maintenance requires attention",
+        )
         self.assertEqual(result.section.lines[2:4], [
             "Upgradeable packages: 2",
             "Security updates: 1",
@@ -237,6 +248,11 @@ class OSMaintenanceCollectionTests(unittest.TestCase):
         self.reboot_path.touch()
         result, _, _ = self.collect()
         self.assertTrue(result.requires_attention)
+        self.assertTrue(result.status_available)
+        self.assertEqual(
+            report._os_maintenance_dashboard_line(result),
+            "⚠ ATTENTION: OS maintenance requires attention",
+        )
         self.assertEqual(result.section.lines[-1], "Reboot required: Yes")
 
     def test_os_release_missing_and_malformed_are_unavailable(self):
@@ -266,6 +282,7 @@ class OSMaintenanceCollectionTests(unittest.TestCase):
                 self.reboot_path,
             )
         self.assertFalse(result.requires_attention)
+        self.assertTrue(result.status_available)
         self.assertEqual(result.section.lines[1], "Running kernel: Unavailable")
 
     def test_apt_get_unavailable_causes_attention_and_unavailable_counts(self):
@@ -282,6 +299,11 @@ class OSMaintenanceCollectionTests(unittest.TestCase):
                 self.reboot_path,
             )
         self.assertTrue(result.requires_attention)
+        self.assertFalse(result.status_available)
+        self.assertEqual(
+            report._os_maintenance_dashboard_line(result),
+            "❌ FAIL: OS maintenance status could not be determined",
+        )
         self.assertEqual(result.section.lines[2:4], [
             "Upgradeable packages: Unavailable",
             "Security updates: Unavailable",
@@ -290,6 +312,7 @@ class OSMaintenanceCollectionTests(unittest.TestCase):
     def test_nonzero_apt_simulation_causes_attention_and_unavailable_counts(self):
         result, _, _ = self.collect(returncode=1)
         self.assertTrue(result.requires_attention)
+        self.assertFalse(result.status_available)
         self.assertEqual(result.section.lines[2:4], [
             "Upgradeable packages: Unavailable",
             "Security updates: Unavailable",
@@ -310,6 +333,7 @@ class OSMaintenanceCollectionTests(unittest.TestCase):
                 self.reboot_path,
             )
         self.assertTrue(result.requires_attention)
+        self.assertFalse(result.status_available)
         self.assertEqual(result.section.lines[2:4], [
             "Upgradeable packages: Unavailable",
             "Security updates: Unavailable",
@@ -318,6 +342,7 @@ class OSMaintenanceCollectionTests(unittest.TestCase):
     def test_malformed_apt_simulation_causes_attention(self):
         result, _, _ = self.collect(output="unexpected apt output\n")
         self.assertTrue(result.requires_attention)
+        self.assertFalse(result.status_available)
         self.assertEqual(result.section.lines[2:4], [
             "Upgradeable packages: Unavailable",
             "Security updates: Unavailable",
@@ -330,6 +355,7 @@ Inst local-package [1] (2 [amd64])
 """
         result, _, _ = self.collect(output=output)
         self.assertTrue(result.requires_attention)
+        self.assertFalse(result.status_available)
         self.assertEqual(result.section.lines[2:4], [
             "Upgradeable packages: 1",
             "Security updates: Unavailable",
@@ -346,11 +372,46 @@ Inst local-package [1] (2 [amd64])
         with patch.object(Path, "stat", stat_with_marker_error):
             result, _, _ = self.collect()
         self.assertTrue(result.requires_attention)
+        self.assertFalse(result.status_available)
+        self.assertEqual(
+            report._os_maintenance_dashboard_line(result),
+            "❌ FAIL: OS maintenance status could not be determined",
+        )
         self.assertEqual(result.section.lines[-1], "Reboot required: Unavailable")
 
 
 class WeeklyReportIntegrationTests(unittest.TestCase):
-    def run_main(self, maintenance, dry_run=True):
+    def platform_results(self):
+        return [
+            SimpleNamespace(
+                key="postgres_unavailable",
+                healthy=True,
+                summary="PostgreSQL is accepting connections",
+            ),
+            SimpleNamespace(
+                key="container_training_web_stopped",
+                healthy=True,
+                summary="Container training-web is running",
+            ),
+            SimpleNamespace(
+                key="container_training_runner_stopped",
+                healthy=True,
+                summary="Container training-runner is running",
+            ),
+            SimpleNamespace(
+                key="harrisnas_mount_missing",
+                healthy=True,
+                summary="HarrisNAS backup mount is available (nfs, nas)",
+            ),
+        ]
+
+    def run_main(
+        self,
+        maintenance,
+        dry_run=True,
+        health_results=None,
+        active_incidents=None,
+    ):
         sections = {
             "postgresql": report.SummarySection("PostgreSQL", ["Online"]),
             "sync": report.SummarySection("Synchronization", ["No issues"]),
@@ -360,6 +421,10 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
         argv = ["weekly_health_report.py"]
         if dry_run:
             argv.append("--dry-run")
+        if health_results is None:
+            health_results = self.platform_results()
+        if active_incidents is None:
+            active_incidents = {}
         stdout = io.StringIO()
         with (
             patch.object(report.os, "geteuid", return_value=0, create=True),
@@ -367,12 +432,12 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
             patch.object(
                 manager_class.return_value,
                 "list_active",
-                return_value={},
+                return_value=active_incidents,
             ),
             patch.object(
                 report,
                 "collect_checks",
-                return_value=[SimpleNamespace(healthy=True, summary="All good")],
+                return_value=health_results,
             ),
             patch.object(
                 report,
@@ -409,13 +474,21 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
                 ],
             ),
             False,
+            True,
         )
         exit_code, body, send_alert = self.run_main(maintenance)
         self.assertEqual(exit_code, 0)
         self.assertIn("Overall: HEALTHY", body)
-        self.assertLess(body.index("Platform health"), body.index("OS maintenance"))
-        self.assertLess(body.index("OS maintenance"), body.index("PostgreSQL"))
-        self.assertEqual(body.count("OS maintenance"), 1)
+        runner_check = "✅ PASS: Container training-runner is running"
+        os_check = "✅ PASS: OS maintenance is current"
+        backup_check = "✅ PASS: HarrisNAS backup mount is available (nfs, nas)"
+        self.assertLess(body.index(runner_check), body.index(os_check))
+        self.assertLess(body.index(os_check), body.index(backup_check))
+        self.assertEqual(body.count("\nOS maintenance\n"), 1)
+        self.assertIn("- OS release: Ubuntu 24.04.3 LTS", body)
+        detailed_section = body.index("\nOS maintenance\n")
+        self.assertLess(body.index("Platform health"), detailed_section)
+        self.assertLess(detailed_section, body.index("\nPostgreSQL\n"))
         send_alert.assert_not_called()
 
     def test_security_plus_reboot_produce_one_attention_section_and_subject(self):
@@ -431,12 +504,17 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
                 ],
             ),
             True,
+            True,
         )
         exit_code, _, send_alert = self.run_main(maintenance, dry_run=False)
         self.assertEqual(exit_code, 0)
         body = send_alert.call_args.kwargs["body"]
         self.assertIn("Overall: ATTENTION NEEDED", body)
-        self.assertEqual(body.count("OS maintenance"), 1)
+        self.assertIn(
+            "⚠ ATTENTION: OS maintenance requires attention",
+            body,
+        )
+        self.assertEqual(body.count("\nOS maintenance\n"), 1)
         self.assertEqual(
             send_alert.call_args.kwargs["subject"],
             "Harris Server Weekly Health: Attention Needed",
@@ -445,6 +523,7 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
     def test_email_path_uses_exact_attention_subject(self):
         maintenance = report.OSMaintenanceResult(
             report.SummarySection("OS maintenance", ["Security updates: 1"]),
+            True,
             True,
         )
         exit_code, body, send_alert = self.run_main(maintenance, dry_run=False)
@@ -463,6 +542,7 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
         maintenance = report.OSMaintenanceResult(
             report.SummarySection("OS maintenance", ["Security updates: 0"]),
             False,
+            True,
         )
         exit_code, _, send_alert = self.run_main(maintenance, dry_run=False)
         self.assertEqual(exit_code, 0)
@@ -481,3 +561,52 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
             report.build_subject("ATTENTION NEEDED"),
             "Harris Server Weekly Health: Attention Needed",
         )
+
+    def test_unavailable_os_status_renders_fail_and_keeps_overall_attention(self):
+        maintenance = report.OSMaintenanceResult(
+            report.SummarySection(
+                "OS maintenance",
+                [
+                    "OS release: Ubuntu 26.04.1 LTS",
+                    "Running kernel: 7.0.0-38-generic",
+                    "Upgradeable packages: Unavailable",
+                    "Security updates: Unavailable",
+                    "Reboot required: No",
+                ],
+            ),
+            True,
+            False,
+        )
+        exit_code, body, send_alert = self.run_main(maintenance)
+        self.assertEqual(exit_code, 0)
+        self.assertIn(
+            "❌ FAIL: OS maintenance status could not be determined",
+            body,
+        )
+        self.assertIn("Overall: ATTENTION NEEDED", body)
+        self.assertIn("\nOS maintenance\n", body)
+        self.assertIn("PostgreSQL", body)
+        send_alert.assert_not_called()
+
+    def test_platform_failure_and_active_incident_still_require_attention(self):
+        maintenance = report.OSMaintenanceResult(
+            report.SummarySection("OS maintenance", ["Security updates: 0"]),
+            False,
+            True,
+        )
+        failed_results = self.platform_results()
+        failed_results[0].healthy = False
+        failed_results[0].summary = "PostgreSQL is unavailable"
+        scenarios = [
+            ("platform failure", failed_results, {}),
+            ("active incident", self.platform_results(), {"incident": {"severity": "warning", "summary": "Active"}}),
+        ]
+        for name, health_results, active_incidents in scenarios:
+            with self.subTest(name=name):
+                exit_code, body, _ = self.run_main(
+                    maintenance,
+                    health_results=health_results,
+                    active_incidents=active_incidents,
+                )
+                self.assertEqual(exit_code, 0)
+                self.assertIn("Overall: ATTENTION NEEDED", body)
