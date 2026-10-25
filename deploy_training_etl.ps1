@@ -11,6 +11,14 @@ $ArchiveName = "training-etl-deploy.tar.gz"
 $LocalArchive = Join-Path $env:TEMP $ArchiveName
 $RemoteArchive = "/tmp/$ArchiveName"
 $RemoteStage = "/tmp/training-etl-deploy"
+$WeeklyHealthReportPath = "/opt/training/etl/weekly_health_report.py"
+$OperationalEntrypoints = @(
+    "/opt/training/etl/check_system_health.py",
+    "/opt/training/etl/backup_postgres.sh",
+    "/opt/training/etl/backup_test_latest_postgres.sh",
+    $WeeklyHealthReportPath
+)
+$RemoteEntrypointPaths = ($OperationalEntrypoints | ForEach-Object { "'$_'" }) -join " "
 
 try {
     if (-not (Test-Path (Join-Path $ProjectDir "src"))) {
@@ -96,7 +104,37 @@ try {
 
     Write-Host "Extracting files on harrisserver..."
 
-    $RemoteCommand = "set -e; rm -rf '$RemoteStage'; mkdir -p '$RemoteStage'; tar -xzf '$RemoteArchive' -C '$RemoteStage'; cp -a '$RemoteStage/src/.' '/opt/training/etl/'; cp '$RemoteStage/Dockerfile' '$RemoteStage/requirements.txt' '/opt/training/etl-build/'; cp '$RemoteStage/docker-compose.server.yml' '/opt/training/docker-compose.server.yml'; sed -i 's/\r`$//' '/opt/training/etl/check_system_health.py' '/opt/training/etl/backup_postgres.sh' '/opt/training/etl/backup_test_latest_postgres.sh'; chmod 755 '/opt/training/etl/check_system_health.py' '/opt/training/etl/backup_postgres.sh' '/opt/training/etl/backup_test_latest_postgres.sh'; rm -rf '$RemoteStage'; rm -f '$RemoteArchive'; echo 'Deployment complete.'"
+    $RemoteCommandTemplate = @'
+set -e
+rm -rf '__REMOTE_STAGE__'
+mkdir -p '__REMOTE_STAGE__'
+tar -xzf '__REMOTE_ARCHIVE__' -C '__REMOTE_STAGE__'
+cp -a '__REMOTE_STAGE__/src/.' '/opt/training/etl/'
+cp '__REMOTE_STAGE__/Dockerfile' '__REMOTE_STAGE__/requirements.txt' '/opt/training/etl-build/'
+cp '__REMOTE_STAGE__/docker-compose.server.yml' '/opt/training/docker-compose.server.yml'
+sed -i 's/\r$//' __REMOTE_ENTRYPOINTS__
+chmod 755 __REMOTE_ENTRYPOINTS__
+if ! test -f '__WEEKLY_REPORT__'; then
+    echo 'Deployment assertion failed: weekly_health_report.py is not a regular file.' >&2
+    exit 1
+fi
+if ! test -x '__WEEKLY_REPORT__'; then
+    echo 'Deployment assertion failed: weekly_health_report.py is not executable.' >&2
+    exit 1
+fi
+if [ "$(head -n 1 '__WEEKLY_REPORT__')" != '#!/usr/bin/env python3' ]; then
+    echo 'Deployment assertion failed: weekly_health_report.py has an invalid shebang or CRLF line ending.' >&2
+    exit 1
+fi
+rm -rf '__REMOTE_STAGE__'
+rm -f '__REMOTE_ARCHIVE__'
+echo 'Deployment complete.'
+'@
+    $RemoteCommand = $RemoteCommandTemplate.Replace("__REMOTE_STAGE__", $RemoteStage)
+    $RemoteCommand = $RemoteCommand.Replace("__REMOTE_ARCHIVE__", $RemoteArchive)
+    $RemoteCommand = $RemoteCommand.Replace("__REMOTE_ENTRYPOINTS__", $RemoteEntrypointPaths)
+    $RemoteCommand = $RemoteCommand.Replace("__WEEKLY_REPORT__", $WeeklyHealthReportPath)
+    $RemoteCommand = $RemoteCommand.Replace("`r`n", "`n")
 
     $SshArguments = @(
         "-o"

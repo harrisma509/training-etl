@@ -32,6 +32,15 @@ SERVER="harrisserver"
 SERVER_ETL_DIR="/opt/training/etl"
 SERVER_BUILD_DIR="/opt/training/etl-build"
 SERVER_COMPOSE_FILE="/opt/training/docker-compose.server.yml"
+WEEKLY_HEALTH_REPORT="$SERVER_ETL_DIR/weekly_health_report.py"
+OPERATIONAL_ENTRYPOINTS=(
+  "$SERVER_ETL_DIR/check_system_health.py"
+  "$SERVER_ETL_DIR/backup_postgres.sh"
+  "$SERVER_ETL_DIR/backup_test_latest_postgres.sh"
+  "$WEEKLY_HEALTH_REPORT"
+)
+REMOTE_OPERATIONAL_ENTRYPOINTS="$(printf "'%s' " "${OPERATIONAL_ENTRYPOINTS[@]}")"
+REMOTE_OPERATIONAL_ENTRYPOINTS="${REMOTE_OPERATIONAL_ENTRYPOINTS% }"
 
 for path in "$SRC_DIR" "$COMPOSE_FILE" "$DOCKERFILE" "$REQUIREMENTS_FILE"; do
   if [ ! -e "$path" ]; then
@@ -54,7 +63,33 @@ if [[ ! "$REVISION" =~ ^[0-9a-f]{40}$ || "$REVISION" != "$UPSTREAM_REVISION" ]];
   exit 1
 fi
 
-REMOTE_COMMAND="set -e; rm -rf '$REMOTE_STAGE'; mkdir -p '$REMOTE_STAGE'; tar -xzf '$REMOTE_ARCHIVE' -C '$REMOTE_STAGE'; cp -a '$REMOTE_STAGE/src/.' '$SERVER_ETL_DIR/'; cp '$REMOTE_STAGE/Dockerfile' '$REMOTE_STAGE/requirements.txt' '$SERVER_BUILD_DIR/'; cp '$REMOTE_STAGE/docker-compose.server.yml' '$SERVER_COMPOSE_FILE'; rm -rf '$REMOTE_STAGE'; rm -f '$REMOTE_ARCHIVE'; echo 'Deployment complete.'"
+REMOTE_COMMAND=$(cat <<EOF
+set -e
+rm -rf '$REMOTE_STAGE'
+mkdir -p '$REMOTE_STAGE'
+tar -xzf '$REMOTE_ARCHIVE' -C '$REMOTE_STAGE'
+cp -a '$REMOTE_STAGE/src/.' '$SERVER_ETL_DIR/'
+cp '$REMOTE_STAGE/Dockerfile' '$REMOTE_STAGE/requirements.txt' '$SERVER_BUILD_DIR/'
+cp '$REMOTE_STAGE/docker-compose.server.yml' '$SERVER_COMPOSE_FILE'
+sed -i 's/\\r\$//' $REMOTE_OPERATIONAL_ENTRYPOINTS
+chmod 755 $REMOTE_OPERATIONAL_ENTRYPOINTS
+if ! test -f '$WEEKLY_HEALTH_REPORT'; then
+  echo 'Deployment assertion failed: weekly_health_report.py is not a regular file.' >&2
+  exit 1
+fi
+if ! test -x '$WEEKLY_HEALTH_REPORT'; then
+  echo 'Deployment assertion failed: weekly_health_report.py is not executable.' >&2
+  exit 1
+fi
+if [ "\$(head -n 1 '$WEEKLY_HEALTH_REPORT')" != '#!/usr/bin/env python3' ]; then
+  echo 'Deployment assertion failed: weekly_health_report.py has an invalid shebang or CRLF line ending.' >&2
+  exit 1
+fi
+rm -rf '$REMOTE_STAGE'
+rm -f '$REMOTE_ARCHIVE'
+echo 'Deployment complete.'
+EOF
+)
 
 echo "Packaging training-etl revision $REVISION..."
 rm -f "$LOCAL_ARCHIVE"

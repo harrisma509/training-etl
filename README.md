@@ -711,6 +711,10 @@ without uploading it. Use `-DryRun` on Windows or `--dry-run` on macOS/Linux.
 The scripts stage files only; they do not rebuild or restart containers. Apply
 the operational action required by the changed artifact after staging:
 
+- Both scripts normalize line endings and set mode `755` for the explicit
+  operational-entrypoint allowlist. They verify the weekly health report is a
+  regular executable file with the exact `#!/usr/bin/env python3` shebang
+  before reporting deployment success.
 - Python source change: restart the affected `training-runner` or `training-api` service.
 - `strava.env` change: restart the affected service.
 - Dockerfile or requirements change: rebuild the image and recreate affected services.
