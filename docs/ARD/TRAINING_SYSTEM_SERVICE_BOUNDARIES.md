@@ -94,8 +94,16 @@ Owns:
 - Coach sessions, messages, turns, settings, memories, receipts, and other explicitly web-owned application records.
 - AI-provider orchestration, policy, usage, and cost accounting.
 - On-demand narrative presentation and future Search presentation.
+- Server-side geocoding and saved-location APIs, plus the normalized,
+  read-only Weather API, provider adapter, and process-local cache. The
+  implementation contract is documented in `training-web/docs/WEATHER.md`.
 
 It must not ingest from ETL-owned external sources, receive Strava credentials, duplicate authoritative calculations, redefine persisted field semantics, or expose PostgreSQL directly to browser JavaScript.
+
+`training-etl` owns the saved-location and Plan schema contracts. A future ETL
+Weather consumer, if separately approved, uses the normalized `training-web`
+HTTP API; cross-repository Python imports and direct Open-Meteo calls are not
+the integration boundary.
 
 ## 7. Runtime and Container Responsibilities
 
