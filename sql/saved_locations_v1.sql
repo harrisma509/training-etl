@@ -81,5 +81,13 @@ FROM pg_constraint
 WHERE conrelid = 'public.saved_location'::regclass
 ORDER BY conname;
 
+SELECT
+    indexname,
+    indexdef
+FROM pg_indexes
+WHERE schemaname = 'public'
+  AND tablename = 'saved_location'
+  AND indexname = 'saved_location_single_home_idx';
+
 -- Rollback consideration: dropping this table destroys saved-location data.
 -- Do not drop it after locations have been created or referenced.
