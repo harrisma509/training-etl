@@ -300,6 +300,8 @@ The report includes:
 
 - overall `HEALTHY` or `ATTENTION NEEDED` status
 - platform-health checks and OS maintenance status (`✅ PASS`, `⚠ ATTENTION`, or `❌ FAIL`); detailed OS values remain below
+- saved-location and Geoapify availability, with coordinate privacy status
+- normalized Weather API freshness and available forecast-day count
 - PostgreSQL version and database size
 - Activities, Daily, and Weekly row counts
 - successful and non-OK sync runs during the last seven days

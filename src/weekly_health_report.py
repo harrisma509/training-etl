@@ -14,11 +14,15 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from alert_manager import AlertManager
 from check_system_health import collect_checks
@@ -34,6 +38,42 @@ DEFAULT_SYNC_MAX_AGE_HOURS = 3.0
 DEFAULT_BACKUP_MAX_AGE_HOURS = 26.0
 DEFAULT_DISK_WARNING_PERCENT = 85.0
 DEFAULT_DISK_CRITICAL_PERCENT = 95.0
+DEFAULT_TRAINING_WEB_BASE_URL = "http://127.0.0.1:8088"
+DEFAULT_WEATHER_LOCATION_ID = 1
+SERVICE_HTTP_TIMEOUT_SECONDS = 10
+GEOAPIFY_PROBE_TIMEOUT_SECONDS = 25
+WEATHER_RETRY_DELAYS_SECONDS = (2, 5)
+TEMPORARY_WEATHER_ERROR = "Weather forecast is temporarily unavailable."
+GEOAPIFY_PROBE_STATUSES = {
+    "healthy",
+    "missing_key",
+    "unauthorized",
+    "rate_limited",
+    "timeout",
+    "provider_unavailable",
+    "invalid_json",
+    "empty_results",
+    "probe_error",
+}
+WEATHER_RAW_PROVIDER_FIELDS = {
+    "weather_code",
+    "temperature_2m_max",
+    "temperature_2m_min",
+    "precipitation_probability_max",
+    "precipitation_sum",
+    "snowfall_sum",
+    "wind_speed_10m_max",
+    "wind_direction_10m_dominant",
+    "wind_gusts_10m_max",
+    "sunrise",
+    "sunset",
+    "temperature_2m",
+    "apparent_temperature",
+    "precipitation_probability",
+    "wind_speed_10m",
+    "wind_direction_10m",
+    "wind_gusts_10m",
+}
 APT_UPGRADE_TIMEOUT_SECONDS = 120
 FWUPDMGR_TIMEOUT_SECONDS = 120
 FWUPD_URGENCY_RANK = {
@@ -77,6 +117,98 @@ class HealthArguments:
     sync_max_age_hours: float
     disk_warning_percent: float
     disk_critical_percent: float
+
+
+@dataclass(frozen=True)
+class JsonGetResult:
+    status_code: int | None
+    payload: Any = None
+    failure_category: str | None = None
+
+
+@dataclass(frozen=True)
+class ServiceHealthResult:
+    severity: str
+    dashboard_line: str
+    section: SummarySection
+
+    @property
+    def requires_attention(self) -> bool:
+        return self.severity != "PASS"
+
+
+GEOAPIFY_PROBE_SCRIPT = r'''
+import json
+import os
+import socket
+import time
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+
+def _http_failure(status):
+    if status in (401, 403):
+        return "unauthorized", False
+    if status == 429:
+        return "rate_limited", True
+    if 500 <= status <= 599:
+        return "provider_unavailable", True
+    return "probe_error", False
+
+
+def _probe():
+    key = os.environ.get("GEOAPIFY_API_KEY", "").strip()
+    if not key:
+        return "missing_key"
+
+    url = "https://api.geoapify.com/v1/geocode/autocomplete?" + urlencode(
+        {
+            "text": "Denver Union Station",
+            "format": "json",
+            "limit": 1,
+            "apiKey": key,
+        }
+    )
+    for attempt in range(2):
+        try:
+            request = Request(url, headers={"Accept": "application/json"})
+            with urlopen(request, timeout=10) as response:
+                status = getattr(response, "status", 200)
+                if status != 200:
+                    category, retryable = _http_failure(status)
+                else:
+                    try:
+                        payload = json.loads(response.read().decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        return "invalid_json"
+                    results = payload.get("results") if isinstance(payload, dict) else None
+                    return "healthy" if isinstance(results, list) and results else "empty_results"
+        except HTTPError as error:
+            category, retryable = _http_failure(error.code)
+        except (TimeoutError, socket.timeout):
+            category, retryable = "timeout", True
+        except URLError as error:
+            if isinstance(error.reason, (TimeoutError, socket.timeout)):
+                category, retryable = "timeout", True
+            else:
+                category, retryable = "provider_unavailable", False
+        except OSError:
+            category, retryable = "provider_unavailable", False
+
+        if retryable and attempt == 0:
+            time.sleep(2)
+            continue
+        return category
+    return "probe_error"
+
+
+try:
+    status = _probe()
+except Exception:
+    status = "probe_error"
+print(json.dumps({"status": status}, separators=(",", ":")))
+'''
 
 
 def run_command(command: list[str], timeout: int = 20) -> subprocess.CompletedProcess[str]:
@@ -209,6 +341,317 @@ def collect_sync_section() -> SummarySection:
         )
 
 
+def _decode_json_body(body: bytes) -> tuple[bool, Any]:
+    try:
+        return True, json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False, None
+
+
+def _is_temporary_weather_error(body: bytes) -> bool:
+    valid_json, payload = _decode_json_body(body)
+    return (
+        valid_json
+        and isinstance(payload, dict)
+        and payload == {"detail": TEMPORARY_WEATHER_ERROR}
+    )
+
+
+def _http_get_json(
+    url: str,
+    *,
+    timeout: int = SERVICE_HTTP_TIMEOUT_SECONDS,
+    detect_temporary_weather_error: bool = False,
+) -> JsonGetResult:
+    try:
+        with urlopen(Request(url), timeout=timeout) as response:
+            status = getattr(response, "status", 200)
+            if status != 200:
+                temporary = (
+                    status == 503
+                    and detect_temporary_weather_error
+                    and _is_temporary_weather_error(response.read())
+                )
+                category = "temporary_unavailable" if temporary else f"http_{status}"
+                return JsonGetResult(status, failure_category=category)
+            body = response.read()
+    except HTTPError as error:
+        temporary = False
+        if error.code == 503 and detect_temporary_weather_error:
+            try:
+                temporary = _is_temporary_weather_error(error.read())
+            except OSError:
+                temporary = False
+        category = (
+            "temporary_unavailable"
+            if temporary
+            else f"http_{error.code}"
+        )
+        return JsonGetResult(error.code, failure_category=category)
+    except (TimeoutError, socket.timeout):
+        return JsonGetResult(None, failure_category="timeout")
+    except URLError as error:
+        if isinstance(error.reason, (TimeoutError, socket.timeout)):
+            return JsonGetResult(None, failure_category="timeout")
+        return JsonGetResult(None, failure_category="request_error")
+    except (OSError, ValueError):
+        return JsonGetResult(None, failure_category="request_error")
+
+    valid_json, payload = _decode_json_body(body)
+    if not valid_json:
+        return JsonGetResult(200, failure_category="invalid_json")
+    if detect_temporary_weather_error and _is_temporary_weather_error(body):
+        return JsonGetResult(200, failure_category="temporary_unavailable")
+    return JsonGetResult(200, payload=payload)
+
+
+def _contains_forbidden_key(value: Any, forbidden_keys: set[str]) -> bool:
+    if isinstance(value, dict):
+        for key, nested_value in value.items():
+            if isinstance(key, str) and key.casefold() in forbidden_keys:
+                return True
+            if _contains_forbidden_key(nested_value, forbidden_keys):
+                return True
+    elif isinstance(value, list):
+        return any(
+            _contains_forbidden_key(item, forbidden_keys)
+            for item in value
+        )
+    return False
+
+
+def _response_failure_category(response: JsonGetResult) -> str:
+    if response.failure_category:
+        return response.failure_category
+    if response.status_code is None:
+        return "request_error"
+    return f"http_{response.status_code}"
+
+
+def _saved_locations_result(
+    training_web_base_url: str,
+) -> tuple[bool, int | None, str, str | None]:
+    response = _http_get_json(
+        f"{training_web_base_url.rstrip('/')}/api/saved-locations"
+    )
+    if response.status_code != 200 or response.failure_category:
+        return False, None, "Not verified", _response_failure_category(response)
+    if not isinstance(response.payload, dict):
+        return False, None, "Not verified", "invalid_response"
+
+    coordinates_present = _contains_forbidden_key(
+        response.payload,
+        {"latitude", "longitude"},
+    )
+    coordinate_privacy = "Failed" if coordinates_present else "Passed"
+    if coordinates_present:
+        return False, None, coordinate_privacy, "coordinate_leak"
+    if _contains_forbidden_key(response.payload, {"error", "detail"}):
+        return False, None, coordinate_privacy, "application_error_field"
+    locations = response.payload.get("locations")
+    if not isinstance(locations, list):
+        return False, None, coordinate_privacy, "invalid_response"
+    return True, len(locations), coordinate_privacy, None
+
+
+def _run_geoapify_probe() -> str:
+    try:
+        result = run_command(
+            [
+                "docker",
+                "exec",
+                "training-web",
+                "python",
+                "-c",
+                GEOAPIFY_PROBE_SCRIPT,
+            ],
+            timeout=GEOAPIFY_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "container_unavailable"
+    if result.returncode != 0:
+        return "container_unavailable"
+
+    if not isinstance(result.stdout, str) or len(result.stdout) > 128:
+        return "probe_error"
+    try:
+        contract = json.loads(result.stdout)
+    except (TypeError, json.JSONDecodeError):
+        return "probe_error"
+    status = contract.get("status") if isinstance(contract, dict) else None
+    if (
+        not isinstance(contract, dict)
+        or set(contract) != {"status"}
+        or not isinstance(status, str)
+        or status not in GEOAPIFY_PROBE_STATUSES
+    ):
+        return "probe_error"
+    return status
+
+
+def collect_location_health(
+    training_web_base_url: str = DEFAULT_TRAINING_WEB_BASE_URL,
+) -> ServiceHealthResult:
+    saved_available, saved_count, coordinate_privacy, saved_failure = (
+        _saved_locations_result(training_web_base_url)
+    )
+    geoapify_status = _run_geoapify_probe()
+
+    if not saved_available or geoapify_status in {
+        "missing_key",
+        "container_unavailable",
+    }:
+        severity = "FAIL"
+        dashboard_line = "❌ FAIL: Location service health check failed"
+    elif geoapify_status != "healthy":
+        severity = "WARN"
+        dashboard_line = (
+            "⚠ WARN: Location setup provider is unavailable; "
+            "saved locations remain healthy"
+        )
+    else:
+        severity = "PASS"
+        dashboard_line = "✅ PASS: Location services are healthy"
+
+    lines = [
+        f"Geoapify API: {'Available' if geoapify_status == 'healthy' else 'Unavailable'}",
+        f"Saved-location API: {'Available' if saved_available else 'Unavailable'}",
+        f"Saved locations: {saved_count if saved_count is not None else 'Unavailable'}",
+        f"Coordinate privacy: {coordinate_privacy}",
+    ]
+    if geoapify_status != "healthy":
+        lines.append(f"Geoapify failure category: {geoapify_status}")
+    if saved_failure:
+        lines.append(f"Saved-location failure category: {saved_failure}")
+    return ServiceHealthResult(
+        severity,
+        dashboard_line,
+        SummarySection("Location and Geoapify health", lines),
+    )
+
+
+def _weather_failure_category(response: JsonGetResult) -> str:
+    if response.status_code == 429:
+        return "rate_limited"
+    if response.status_code is not None and 500 <= response.status_code <= 599:
+        if response.failure_category == "temporary_unavailable":
+            return "temporary_unavailable"
+        return f"http_{response.status_code}"
+    if response.failure_category:
+        return response.failure_category
+    if response.status_code is not None and response.status_code != 200:
+        return f"http_{response.status_code}"
+    return "request_error"
+
+
+def _weather_retryable(response: JsonGetResult) -> bool:
+    return (
+        response.failure_category in {"timeout", "temporary_unavailable"}
+        or response.status_code == 429
+        or (
+            response.status_code is not None
+            and 500 <= response.status_code <= 599
+        )
+    )
+
+
+def _validate_weather_payload(
+    payload: Any,
+    location_id: int,
+) -> tuple[str | None, int | None, str, str | None]:
+    if not isinstance(payload, dict):
+        return None, None, "Not verified", "invalid_response"
+
+    forbidden_error = _contains_forbidden_key(payload, {"error", "detail"})
+    forbidden_coordinates = _contains_forbidden_key(
+        payload,
+        {"latitude", "longitude"},
+    )
+    forbidden_provider_fields = _contains_forbidden_key(
+        payload,
+        WEATHER_RAW_PROVIDER_FIELDS,
+    )
+    if forbidden_error:
+        return None, None, "Failed", "application_error_field"
+    if forbidden_coordinates:
+        return None, None, "Failed", "coordinate_leak"
+    if forbidden_provider_fields:
+        return None, None, "Failed", "raw_provider_field"
+
+    if type(payload.get("location_id")) is not int or payload["location_id"] != location_id:
+        return None, None, "Passed", "location_id_mismatch"
+    freshness = payload.get("freshness")
+    if not isinstance(freshness, str) or freshness not in {"fresh", "stale"}:
+        return None, None, "Passed", "invalid_response"
+    for field in ("available_start_date", "available_end_date"):
+        value = payload.get(field)
+        if not isinstance(value, str) or not value.strip():
+            return None, None, "Passed", "invalid_response"
+    daily = payload.get("daily")
+    if not isinstance(daily, list):
+        return None, None, "Passed", "invalid_response"
+    if not daily:
+        return freshness, 0, "Passed", "empty_daily"
+    return freshness, len(daily), "Passed", None
+
+
+def collect_weather_health(
+    training_web_base_url: str = DEFAULT_TRAINING_WEB_BASE_URL,
+    weather_location_id: int = DEFAULT_WEATHER_LOCATION_ID,
+) -> ServiceHealthResult:
+    url = (
+        f"{training_web_base_url.rstrip('/')}/api/weather/locations/"
+        f"{weather_location_id}/forecast"
+    )
+    response: JsonGetResult | None = None
+    for delay in (*WEATHER_RETRY_DELAYS_SECONDS, None):
+        response = _http_get_json(
+            url,
+            detect_temporary_weather_error=True,
+        )
+        if not _weather_retryable(response):
+            break
+        if delay is None:
+            break
+        time.sleep(delay)
+
+    assert response is not None
+    if response.failure_category or response.status_code != 200:
+        failure_category = _weather_failure_category(response)
+        freshness = None
+        daily_count = None
+        privacy = "Not verified"
+    else:
+        freshness, daily_count, privacy, failure_category = _validate_weather_payload(
+            response.payload,
+            weather_location_id,
+        )
+
+    if failure_category:
+        severity = "FAIL"
+        dashboard_line = "❌ FAIL: Weather API health check failed"
+    elif freshness == "stale":
+        severity = "WARN"
+        dashboard_line = "⚠ WARN: Weather API is serving stale cached data"
+    else:
+        severity = "PASS"
+        dashboard_line = "✅ PASS: Weather API is healthy"
+
+    lines = [
+        f"Forecast API: {'Available' if response.status_code == 200 else 'Unavailable'}",
+        f"Forecast freshness: {freshness.title() if freshness else 'Unavailable'}",
+        f"Forecast days available: {daily_count if daily_count is not None else 'Unavailable'}",
+        f"Response privacy contract: {privacy}",
+    ]
+    if failure_category:
+        lines.append(f"Failure category: {failure_category}")
+    return ServiceHealthResult(
+        severity,
+        dashboard_line,
+        SummarySection("Weather API health", lines),
+    )
+
+
 def collect_health_freshness_section() -> SummarySection:
     queries = {
         "Steps": "SELECT MAX(measured_at)::text FROM health_steps;",
@@ -262,6 +705,8 @@ def collect_backup_section(backup_dir: Path, restore_log: Path) -> SummarySectio
 def collect_platform_section(
     health_results: list[Any],
     os_maintenance: OSMaintenanceResult,
+    location_health: ServiceHealthResult,
+    weather_health: ServiceHealthResult,
 ) -> SummarySection:
     lines = [
         f"{'✅ PASS' if result.healthy else '❌ FAIL'}: {result.summary}"
@@ -286,7 +731,11 @@ def collect_platform_section(
             ),
             len(lines),
         )
-    lines.insert(insertion_index, _os_maintenance_dashboard_line(os_maintenance))
+    lines[insertion_index:insertion_index] = [
+        _os_maintenance_dashboard_line(os_maintenance),
+        location_health.dashboard_line,
+        weather_health.dashboard_line,
+    ]
     return SummarySection(
         "Platform health",
         lines,
@@ -597,6 +1046,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--backup-dir", default=DEFAULT_BACKUP_DIR)
     parser.add_argument("--restore-log", default=DEFAULT_RESTORE_LOG)
     parser.add_argument("--backup-log", default=DEFAULT_BACKUP_LOG)
+    parser.add_argument(
+        "--training-web-base-url",
+        default=DEFAULT_TRAINING_WEB_BASE_URL,
+    )
+    parser.add_argument(
+        "--weather-location-id",
+        type=int,
+        default=DEFAULT_WEATHER_LOCATION_ID,
+    )
     parser.add_argument("--backup-max-age-hours", type=float, default=DEFAULT_BACKUP_MAX_AGE_HOURS)
     parser.add_argument("--sync-max-age-hours", type=float, default=DEFAULT_SYNC_MAX_AGE_HOURS)
     parser.add_argument("--disk-warning-percent", type=float, default=DEFAULT_DISK_WARNING_PERCENT)
@@ -639,11 +1097,18 @@ def main() -> int:
         active_incidents = manager.list_active()
         failed_checks = [result for result in health_results if not result.healthy]
         os_maintenance = collect_os_maintenance_section()
+        location_health = collect_location_health(arguments.training_web_base_url)
+        weather_health = collect_weather_health(
+            arguments.training_web_base_url,
+            arguments.weather_location_id,
+        )
         overall = (
             "HEALTHY"
             if not failed_checks
             and not active_incidents
             and not os_maintenance.requires_attention
+            and not location_health.requires_attention
+            and not weather_health.requires_attention
             else "ATTENTION NEEDED"
         )
         hostname = subprocess.run(
@@ -654,10 +1119,17 @@ def main() -> int:
         ).stdout.strip() or "harrisserver"
 
         sections = [
-            collect_platform_section(health_results, os_maintenance),
+            collect_platform_section(
+                health_results,
+                os_maintenance,
+                location_health,
+                weather_health,
+            ),
             os_maintenance.section,
             collect_postgresql_section(),
             collect_sync_section(),
+            location_health.section,
+            weather_health.section,
             collect_health_freshness_section(),
             collect_backup_section(Path(arguments.backup_dir), Path(arguments.restore_log)),
             collect_incident_section(manager),

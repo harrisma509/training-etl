@@ -1,12 +1,16 @@
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
 from types import ModuleType, SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import call, patch
+from urllib.error import HTTPError
+from urllib.parse import parse_qs, urlsplit
+import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -81,6 +85,465 @@ FWUPD_DBX_UPDATES = json.dumps(
         ]
     }
 )
+
+
+class StubHttpResponse:
+    def __init__(self, status, body):
+        self.status = status
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+    def read(self):
+        return self.body
+
+
+def json_http_response(payload, status=200):
+    return StubHttpResponse(status, json.dumps(payload).encode("utf-8"))
+
+
+def http_error(status, payload=None):
+    body = b"" if payload is None else json.dumps(payload).encode("utf-8")
+    return HTTPError(
+        "http://127.0.0.1/health-probe",
+        status,
+        "synthetic response",
+        None,
+        io.BytesIO(body),
+    )
+
+
+def normalized_forecast(freshness="fresh"):
+    return {
+        "location_id": 1,
+        "display_name": "Synthetic Saved Location",
+        "timezone_name": "Etc/UTC",
+        "generated_at": "2026-01-01T12:00:00Z",
+        "available_start_date": "2026-01-01",
+        "available_end_date": "2026-01-02",
+        "freshness": freshness,
+        "daily": [
+            {"date": "2026-01-01", "condition": "clear"},
+            {"date": "2026-01-02", "condition": "cloudy"},
+        ],
+    }
+
+
+class GeoapifyProbeScriptTests(unittest.TestCase):
+    def run_probe(self, side_effect, *, key="synthetic-test-secret"):
+        stdout = io.StringIO()
+        env = {} if key is None else {"GEOAPIFY_API_KEY": key}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(urllib.request, "urlopen") as opener,
+            patch("time.sleep") as sleep,
+            patch("sys.stdout", stdout),
+        ):
+            if isinstance(side_effect, (list, tuple, BaseException)):
+                opener.side_effect = side_effect
+            else:
+                opener.return_value = side_effect
+            exec(report.GEOAPIFY_PROBE_SCRIPT, {})
+        return json.loads(stdout.getvalue()), opener, sleep, stdout.getvalue()
+
+    def test_valid_probe_prints_only_sanitized_status(self):
+        response = json_http_response(
+            {
+                "results": [
+                    {
+                        "name": "Synthetic Provider Result",
+                        "formatted": "Synthetic Address",
+                        "lat": 39.0,
+                        "lon": -105.0,
+                    }
+                ]
+            }
+        )
+        result, opener, _, output = self.run_probe(response)
+        request = opener.call_args.args[0]
+        query = parse_qs(urlsplit(request.full_url).query)
+
+        self.assertEqual(result, {"status": "healthy"})
+        self.assertEqual(query["text"], ["Denver Union Station"])
+        self.assertEqual(query["format"], ["json"])
+        self.assertEqual(query["limit"], ["1"])
+        self.assertEqual(opener.call_args.kwargs["timeout"], 10)
+        self.assertFalse(
+            "synthetic-test-secret" in output,
+            "probe output must not contain the configured key",
+        )
+        self.assertNotIn("Synthetic Provider Result", output)
+        self.assertNotIn("Synthetic Address", output)
+        self.assertNotIn("39.0", output)
+
+    def test_missing_key_does_not_make_a_provider_request(self):
+        result, opener, _, output = self.run_probe(None, key=None)
+        self.assertEqual(result, {"status": "missing_key"})
+        opener.assert_not_called()
+        self.assertFalse(
+            "synthetic-test-secret" in output,
+            "probe output must not contain key values",
+        )
+
+    def test_unauthorized_responses_do_not_retry_or_expose_error_url(self):
+        for status in (401, 403):
+            with self.subTest(status=status):
+                result, opener, sleep, output = self.run_probe(
+                    http_error(status),
+                )
+                self.assertEqual(result, {"status": "unauthorized"})
+                self.assertEqual(opener.call_count, 1)
+                sleep.assert_not_called()
+                self.assertFalse(
+                    "synthetic-test-secret" in output,
+                    "probe output must not contain key values",
+                )
+
+    def test_timeout_rate_limit_and_server_error_retry_once(self):
+        scenarios = (
+            (TimeoutError("synthetic timeout"), "timeout"),
+            (http_error(429), "rate_limited"),
+            (http_error(503), "provider_unavailable"),
+        )
+        for first_error, expected_status in scenarios:
+            with self.subTest(expected_status=expected_status):
+                result, opener, sleep, _ = self.run_probe(
+                    [first_error, first_error],
+                )
+                self.assertEqual(result, {"status": expected_status})
+                self.assertEqual(opener.call_count, 2)
+                sleep.assert_called_once_with(2)
+
+    def test_invalid_json_and_empty_results_are_sanitized(self):
+        scenarios = (
+            (StubHttpResponse(200, b"synthetic-complete-provider-body"), "invalid_json"),
+            (json_http_response({"results": []}), "empty_results"),
+        )
+        for response, expected_status in scenarios:
+            with self.subTest(expected_status=expected_status):
+                result, _, _, output = self.run_probe(response)
+                self.assertEqual(result, {"status": expected_status})
+                self.assertNotIn("synthetic-complete-provider-body", output)
+
+
+class LocationHealthTests(unittest.TestCase):
+    def collect(self, payload, geoapify_status="healthy", *, status=200):
+        with (
+            patch.object(
+                report,
+                "urlopen",
+                return_value=json_http_response(payload, status),
+            ),
+            patch.object(report, "_run_geoapify_probe", return_value=geoapify_status),
+        ):
+            return report.collect_location_health()
+
+    def test_coordinate_free_saved_locations_and_provider_pass(self):
+        result = self.collect(
+            {
+                "locations": [
+                    {
+                        "location_id": 41,
+                        "display_name": "Synthetic Saved Location",
+                        "timezone_name": "Etc/UTC",
+                    },
+                    {"location_id": 42, "display_name": "Synthetic Second Location"},
+                ]
+            }
+        )
+        rendered = "\n".join(result.section.lines)
+        self.assertEqual(result.severity, "PASS")
+        self.assertEqual(result.section.title, "Location and Geoapify health")
+        self.assertIn("Saved locations: 2", rendered)
+        self.assertIn("Coordinate privacy: Passed", rendered)
+        self.assertNotIn("Synthetic Saved Location", rendered)
+        self.assertNotIn("Etc/UTC", rendered)
+
+    def test_nested_coordinates_and_application_errors_fail(self):
+        scenarios = (
+            (
+                {"locations": [{"metadata": {"Latitude": "synthetic-latitude"}}]},
+                "coordinate_leak",
+                "Coordinate privacy: Failed",
+            ),
+            (
+                {"locations": [{"metadata": {"LONGITUDE": "synthetic-longitude"}}]},
+                "coordinate_leak",
+                "Coordinate privacy: Failed",
+            ),
+            (
+                {"locations": [], "metadata": {"Error": "synthetic"}},
+                "application_error_field",
+                "Coordinate privacy: Passed",
+            ),
+            (
+                {"locations": [], "metadata": {"DETAIL": "synthetic"}},
+                "application_error_field",
+                "Coordinate privacy: Passed",
+            ),
+        )
+        for payload, expected_category, expected_privacy in scenarios:
+            with self.subTest(expected_category=expected_category, payload=payload):
+                result = self.collect(payload)
+                rendered = "\n".join(result.section.lines)
+                self.assertEqual(result.severity, "FAIL")
+                self.assertIn(
+                    f"Saved-location failure category: {expected_category}",
+                    rendered,
+                )
+                self.assertIn(expected_privacy, rendered)
+                self.assertNotIn("synthetic-latitude", rendered)
+                self.assertNotIn("synthetic-longitude", rendered)
+
+    def test_saved_location_http_failures_and_invalid_shapes_fail(self):
+        scenarios = (
+            (http_error(503), "http_503"),
+            (TimeoutError("synthetic timeout"), "timeout"),
+            (json_http_response({"unexpected": []}), "invalid_response"),
+        )
+        for failure, expected_category in scenarios:
+            with self.subTest(expected_category=expected_category):
+                with (
+                    patch.object(report, "urlopen") as opener,
+                    patch.object(report, "_run_geoapify_probe", return_value="healthy"),
+                ):
+                    if isinstance(failure, BaseException):
+                        opener.side_effect = failure
+                    else:
+                        opener.return_value = failure
+                    result = report.collect_location_health()
+                self.assertEqual(result.severity, "FAIL")
+                self.assertIn(
+                    f"Saved-location failure category: {expected_category}",
+                    result.section.lines,
+                )
+
+    def test_invalid_saved_location_response_fails_without_body_output(self):
+        response_body_marker = "synthetic-secret-response-body"
+        with (
+            patch.object(
+                report,
+                "urlopen",
+                return_value=StubHttpResponse(200, response_body_marker.encode()),
+            ),
+            patch.object(report, "_run_geoapify_probe", return_value="healthy"),
+        ):
+            result = report.collect_location_health()
+        rendered = "\n".join(result.section.lines)
+        self.assertEqual(result.severity, "FAIL")
+        self.assertIn("invalid_json", rendered)
+        self.assertNotIn(response_body_marker, rendered)
+
+    def test_provider_degradation_warns_when_saved_locations_remain_healthy(self):
+        result = self.collect(
+            {"locations": [{"location_id": 41, "display_name": "Synthetic"}]},
+            geoapify_status="rate_limited",
+        )
+        self.assertEqual(result.severity, "WARN")
+        self.assertIn("saved locations remain healthy", result.dashboard_line)
+        self.assertIn("Saved-location API: Available", result.section.lines)
+
+    def test_missing_key_and_unavailable_container_fail(self):
+        for status in ("missing_key", "container_unavailable"):
+            with self.subTest(status=status):
+                result = self.collect({"locations": []}, geoapify_status=status)
+                self.assertEqual(result.severity, "FAIL")
+                self.assertIn(f"Geoapify failure category: {status}", result.section.lines)
+
+    def test_geoapify_parent_ignores_child_stderr(self):
+        saved = {"locations": []}
+        command_result = CompletedProcess(
+            ["docker", "exec", "training-web"],
+            0,
+            '{"status":"healthy"}',
+            "synthetic-secret-stderr",
+        )
+        with (
+            patch.object(report, "urlopen", return_value=json_http_response(saved)),
+            patch.object(report, "run_command", return_value=command_result) as run,
+        ):
+            result = report.collect_location_health()
+        self.assertEqual(result.severity, "PASS")
+        self.assertEqual(run.call_args.args[0][:4], ["docker", "exec", "training-web", "python"])
+        self.assertNotIn("synthetic-secret-stderr", "\n".join(result.section.lines))
+
+    def test_unavailable_geoapify_container_is_a_failure(self):
+        with (
+            patch.object(report, "urlopen", return_value=json_http_response({"locations": []})),
+            patch.object(
+                report,
+                "run_command",
+                return_value=CompletedProcess(["docker"], 1, "", "synthetic-secret-stderr"),
+            ),
+        ):
+            result = report.collect_location_health()
+        self.assertEqual(result.severity, "FAIL")
+        rendered = "\n".join(result.section.lines)
+        self.assertIn("container_unavailable", rendered)
+        self.assertNotIn("synthetic-secret-stderr", rendered)
+
+
+class WeatherHealthTests(unittest.TestCase):
+    def collect_with_payload(self, payload):
+        with patch.object(
+            report,
+            "urlopen",
+            return_value=json_http_response(payload),
+        ):
+            return report.collect_weather_health()
+
+    def test_fresh_and_stale_normalized_forecasts_map_to_pass_and_warn(self):
+        fresh = self.collect_with_payload(normalized_forecast("fresh"))
+        stale = self.collect_with_payload(normalized_forecast("stale"))
+        self.assertEqual(fresh.severity, "PASS")
+        self.assertIn("Forecast freshness: Fresh", fresh.section.lines)
+        self.assertIn("Forecast days available: 2", fresh.section.lines)
+        self.assertEqual(stale.severity, "WARN")
+        self.assertEqual(
+            stale.dashboard_line,
+            "⚠ WARN: Weather API is serving stale cached data",
+        )
+
+    def test_two_temporary_failures_then_success_use_bounded_delays(self):
+        transient = http_error(503, {"detail": report.TEMPORARY_WEATHER_ERROR})
+        with (
+            patch.object(
+                report,
+                "urlopen",
+                side_effect=[
+                    transient,
+                    http_error(503, {"detail": report.TEMPORARY_WEATHER_ERROR}),
+                    json_http_response(normalized_forecast()),
+                ],
+            ) as opener,
+            patch.object(report.time, "sleep") as sleep,
+        ):
+            result = report.collect_weather_health()
+        self.assertEqual(result.severity, "PASS")
+        self.assertEqual(opener.call_count, 3)
+        self.assertEqual(sleep.call_args_list, [call(2), call(5)])
+
+    def test_temporary_unavailable_exhaustion_fails_after_three_attempts(self):
+        transient = {"detail": report.TEMPORARY_WEATHER_ERROR}
+        with (
+            patch.object(
+                report,
+                "urlopen",
+                side_effect=[http_error(503, transient) for _ in range(3)],
+            ) as opener,
+            patch.object(report.time, "sleep") as sleep,
+        ):
+            result = report.collect_weather_health()
+        self.assertEqual(result.severity, "FAIL")
+        self.assertIn("Failure category: temporary_unavailable", result.section.lines)
+        self.assertEqual(opener.call_count, 3)
+        self.assertEqual(sleep.call_args_list, [call(2), call(5)])
+        self.assertNotIn(report.TEMPORARY_WEATHER_ERROR, "\n".join(result.section.lines))
+
+    def test_timeout_rate_limit_and_server_error_use_three_attempts(self):
+        scenarios = (
+            (TimeoutError("synthetic timeout"), "timeout"),
+            (http_error(429), "rate_limited"),
+            (http_error(503), "http_503"),
+        )
+        for failure, expected_category in scenarios:
+            with self.subTest(expected_category=expected_category):
+                with (
+                    patch.object(report, "urlopen", side_effect=[failure] * 3) as opener,
+                    patch.object(report.time, "sleep") as sleep,
+                ):
+                    result = report.collect_weather_health()
+                self.assertEqual(result.severity, "FAIL")
+                self.assertIn(
+                    f"Failure category: {expected_category}",
+                    result.section.lines,
+                )
+                self.assertEqual(opener.call_count, 3)
+                self.assertEqual(sleep.call_args_list, [call(2), call(5)])
+
+    def test_404_and_422_fail_without_retry(self):
+        for status in (404, 422):
+            with self.subTest(status=status):
+                with (
+                    patch.object(report, "urlopen", side_effect=http_error(status)) as opener,
+                    patch.object(report.time, "sleep") as sleep,
+                ):
+                    result = report.collect_weather_health()
+                self.assertEqual(result.severity, "FAIL")
+                self.assertIn(f"Failure category: http_{status}", result.section.lines)
+                self.assertEqual(opener.call_count, 1)
+                sleep.assert_not_called()
+
+    def test_invalid_shapes_and_forbidden_nested_fields_fail_without_retry(self):
+        empty_daily = normalized_forecast()
+        empty_daily["daily"] = []
+        wrong_location = normalized_forecast()
+        wrong_location["location_id"] = 2
+        coordinate_leak = normalized_forecast()
+        coordinate_leak["daily"][0]["metadata"] = {
+            "Latitude": "synthetic-latitude"
+        }
+        raw_provider_field = normalized_forecast()
+        raw_provider_field["daily"][0]["temperature_2m_max"] = 10
+        application_error = normalized_forecast()
+        application_error["daily"][0]["metadata"] = {"DETAIL": "synthetic"}
+        invalid_freshness = normalized_forecast()
+        invalid_freshness["freshness"] = ["fresh"]
+        invalid_date_range = normalized_forecast()
+        invalid_date_range["available_start_date"] = 1
+        scenarios = (
+            (empty_daily, "empty_daily"),
+            (wrong_location, "location_id_mismatch"),
+            (coordinate_leak, "coordinate_leak"),
+            (raw_provider_field, "raw_provider_field"),
+            (application_error, "application_error_field"),
+            (invalid_freshness, "invalid_response"),
+            (invalid_date_range, "invalid_response"),
+            ({"location_id": 1, "daily": []}, "invalid_response"),
+        )
+        for payload, expected_category in scenarios:
+            with self.subTest(expected_category=expected_category):
+                with (
+                    patch.object(
+                        report,
+                        "urlopen",
+                        return_value=json_http_response(payload),
+                    ) as opener,
+                    patch.object(report.time, "sleep") as sleep,
+                ):
+                    result = report.collect_weather_health()
+                self.assertEqual(result.severity, "FAIL")
+                self.assertIn(
+                    f"Failure category: {expected_category}",
+                    result.section.lines,
+                )
+                opener.assert_called_once()
+                sleep.assert_not_called()
+
+    def test_invalid_json_and_complete_response_body_are_not_rendered(self):
+        marker = "synthetic-complete-weather-response"
+        with patch.object(
+            report,
+            "urlopen",
+            return_value=StubHttpResponse(200, marker.encode("utf-8")),
+        ):
+            result = report.collect_weather_health()
+        rendered = "\n".join(result.section.lines)
+        self.assertEqual(result.severity, "FAIL")
+        self.assertIn("Failure category: invalid_json", rendered)
+        self.assertNotIn(marker, rendered)
+
+    def test_display_name_timezone_and_forecast_dates_are_not_rendered(self):
+        result = self.collect_with_payload(normalized_forecast())
+        rendered = "\n".join(result.section.lines)
+        self.assertNotIn("Synthetic Saved Location", rendered)
+        self.assertNotIn("Etc/UTC", rendered)
+        self.assertNotIn("2026-01-01", rendered)
+        self.assertNotIn("2026-01-02", rendered)
 
 
 class AptSimulationParsingTests(unittest.TestCase):
@@ -569,6 +1032,8 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
         dry_run=True,
         health_results=None,
         active_incidents=None,
+        location_health=None,
+        weather_health=None,
     ):
         sections = {
             "postgresql": report.SummarySection("PostgreSQL", ["Online"]),
@@ -576,6 +1041,16 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
             "freshness": report.SummarySection("Health-data freshness", ["Fresh"]),
             "backup": report.SummarySection("Backups and recovery", ["Present"]),
         }
+        location_health = location_health or report.ServiceHealthResult(
+            "PASS",
+            "✅ PASS: Location services are healthy",
+            report.SummarySection("Location and Geoapify health", ["Saved locations: 2"]),
+        )
+        weather_health = weather_health or report.ServiceHealthResult(
+            "PASS",
+            "✅ PASS: Weather API is healthy",
+            report.SummarySection("Weather API health", ["Forecast days available: 2"]),
+        )
         argv = ["weekly_health_report.py"]
         if dry_run:
             argv.append("--dry-run")
@@ -601,6 +1076,16 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
                 report,
                 "collect_os_maintenance_section",
                 return_value=maintenance,
+            ),
+            patch.object(
+                report,
+                "collect_location_health",
+                return_value=location_health,
+            ),
+            patch.object(
+                report,
+                "collect_weather_health",
+                return_value=weather_health,
             ),
             patch.object(report, "collect_postgresql_section", return_value=sections["postgresql"]),
             patch.object(report, "collect_sync_section", return_value=sections["sync"]),
@@ -641,14 +1126,113 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
         runner_check = "✅ PASS: Container training-runner is running"
         os_check = "✅ PASS: OS maintenance is current"
         backup_check = "✅ PASS: HarrisNAS backup mount is available (nfs, nas)"
+        location_check = "✅ PASS: Location services are healthy"
+        weather_check = "✅ PASS: Weather API is healthy"
         self.assertLess(body.index(runner_check), body.index(os_check))
-        self.assertLess(body.index(os_check), body.index(backup_check))
+        self.assertLess(body.index(os_check), body.index(location_check))
+        self.assertLess(body.index(location_check), body.index(weather_check))
+        self.assertLess(body.index(weather_check), body.index(backup_check))
         self.assertEqual(body.count("\nOS maintenance\n"), 1)
         self.assertIn("- OS release: Ubuntu 24.04.3 LTS", body)
         detailed_section = body.index("\nOS maintenance\n")
         self.assertLess(body.index("Platform health"), detailed_section)
         self.assertLess(detailed_section, body.index("\nPostgreSQL\n"))
+        self.assertLess(
+            body.index("\nSynchronization\n"),
+            body.index("\nLocation and Geoapify health\n"),
+        )
+        self.assertLess(
+            body.index("\nLocation and Geoapify health\n"),
+            body.index("\nWeather API health\n"),
+        )
+        self.assertLess(
+            body.index("\nWeather API health\n"),
+            body.index("\nHealth-data freshness\n"),
+        )
         send_alert.assert_not_called()
+
+    def test_any_location_or_weather_warning_or_failure_requires_attention(self):
+        healthy_location = report.ServiceHealthResult(
+            "PASS",
+            "✅ PASS: Location services are healthy",
+            report.SummarySection("Location and Geoapify health", []),
+        )
+        healthy_weather = report.ServiceHealthResult(
+            "PASS",
+            "✅ PASS: Weather API is healthy",
+            report.SummarySection("Weather API health", []),
+        )
+        scenarios = (
+            (
+                report.ServiceHealthResult(
+                    "WARN",
+                    "⚠ WARN: Location setup provider is unavailable; saved locations remain healthy",
+                    report.SummarySection("Location and Geoapify health", []),
+                ),
+                healthy_weather,
+            ),
+            (
+                healthy_location,
+                report.ServiceHealthResult(
+                    "WARN",
+                    "⚠ WARN: Weather API is serving stale cached data",
+                    report.SummarySection("Weather API health", []),
+                ),
+            ),
+            (
+                report.ServiceHealthResult(
+                    "FAIL",
+                    "❌ FAIL: Location service health check failed",
+                    report.SummarySection("Location and Geoapify health", []),
+                ),
+                healthy_weather,
+            ),
+            (
+                healthy_location,
+                report.ServiceHealthResult(
+                    "FAIL",
+                    "❌ FAIL: Weather API health check failed",
+                    report.SummarySection("Weather API health", []),
+                ),
+            ),
+        )
+        maintenance = report.OSMaintenanceResult(
+            report.SummarySection("OS maintenance", ["Security updates: 0"]),
+            False,
+            True,
+        )
+        for location, weather in scenarios:
+            with self.subTest(location=location.severity, weather=weather.severity):
+                exit_code, _, send_alert = self.run_main(
+                    maintenance,
+                    dry_run=False,
+                    location_health=location,
+                    weather_health=weather,
+                )
+                self.assertEqual(exit_code, 0)
+                self.assertEqual(
+                    send_alert.call_args.kwargs["subject"],
+                    "Harris Server Weekly Health: Attention Needed",
+                )
+                self.assertIn(
+                    "Overall: ATTENTION NEEDED",
+                    send_alert.call_args.kwargs["body"],
+                )
+
+    def test_cli_overrides_keep_the_approved_production_defaults(self):
+        defaults = report.build_parser().parse_args([])
+        override = report.build_parser().parse_args(
+            [
+                "--training-web-base-url",
+                "http://127.0.0.1:9999",
+                "--weather-location-id",
+                "7",
+            ]
+        )
+        self.assertEqual(defaults.training_web_base_url, "http://127.0.0.1:8088")
+        self.assertEqual(defaults.weather_location_id, 1)
+        self.assertEqual(override.training_web_base_url, "http://127.0.0.1:9999")
+        self.assertEqual(override.weather_location_id, 7)
 
     def test_security_plus_reboot_produce_one_attention_section_and_subject(self):
         maintenance = report.OSMaintenanceResult(
