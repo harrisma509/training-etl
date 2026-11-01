@@ -517,8 +517,11 @@ def collect_location_health(
         f"Geoapify API: {'Available' if geoapify_status == 'healthy' else 'Unavailable'}",
         f"Saved-location API: {'Available' if saved_available else 'Unavailable'}",
         f"Saved locations: {saved_count if saved_count is not None else 'Unavailable'}",
-        f"Coordinate privacy: {coordinate_privacy}",
     ]
+    if coordinate_privacy == "Failed":
+        lines.append("❌ FAIL: Location coordinates were exposed")
+    elif saved_failure == "application_error_field":
+        lines.append("❌ FAIL: Saved-location privacy contract failed")
     if geoapify_status != "healthy":
         lines.append(f"Geoapify failure category: {geoapify_status}")
     if saved_failure:
@@ -641,8 +644,14 @@ def collect_weather_health(
         f"Forecast API: {'Available' if response.status_code == 200 else 'Unavailable'}",
         f"Forecast freshness: {freshness.title() if freshness else 'Unavailable'}",
         f"Forecast days available: {daily_count if daily_count is not None else 'Unavailable'}",
-        f"Response privacy contract: {privacy}",
     ]
+    if privacy == "Failed":
+        if failure_category == "coordinate_leak":
+            lines.append("❌ FAIL: Weather location coordinates were exposed")
+        elif failure_category == "raw_provider_field":
+            lines.append("❌ FAIL: Raw weather-provider data was exposed")
+        else:
+            lines.append("❌ FAIL: Weather response privacy contract failed")
     if failure_category:
         lines.append(f"Failure category: {failure_category}")
     return ServiceHealthResult(
@@ -709,7 +718,7 @@ def collect_platform_section(
     weather_health: ServiceHealthResult,
 ) -> SummarySection:
     lines = [
-        f"{'✅ PASS' if result.healthy else '❌ FAIL'}: {result.summary}"
+        _platform_check_dashboard_line(result)
         for result in health_results
     ]
     runner_index = next(
@@ -740,6 +749,12 @@ def collect_platform_section(
         "Platform health",
         lines,
     )
+
+
+def _platform_check_dashboard_line(result: Any) -> str:
+    if result.key == "harrisnas_mount_missing" and result.healthy:
+        return "✅ PASS: HarrisNAS backup mount is available"
+    return f"{'✅ PASS' if result.healthy else '❌ FAIL'}: {result.summary}"
 
 
 def _os_maintenance_dashboard_line(result: OSMaintenanceResult) -> str:

@@ -258,8 +258,15 @@ class LocationHealthTests(unittest.TestCase):
         rendered = "\n".join(result.section.lines)
         self.assertEqual(result.severity, "PASS")
         self.assertEqual(result.section.title, "Location and Geoapify health")
-        self.assertIn("Saved locations: 2", rendered)
-        self.assertIn("Coordinate privacy: Passed", rendered)
+        self.assertEqual(
+            result.section.lines,
+            [
+                "Geoapify API: Available",
+                "Saved-location API: Available",
+                "Saved locations: 2",
+            ],
+        )
+        self.assertNotIn("Coordinate privacy: Passed", rendered)
         self.assertNotIn("Synthetic Saved Location", rendered)
         self.assertNotIn("Etc/UTC", rendered)
 
@@ -268,25 +275,25 @@ class LocationHealthTests(unittest.TestCase):
             (
                 {"locations": [{"metadata": {"Latitude": "synthetic-latitude"}}]},
                 "coordinate_leak",
-                "Coordinate privacy: Failed",
+                "❌ FAIL: Location coordinates were exposed",
             ),
             (
                 {"locations": [{"metadata": {"LONGITUDE": "synthetic-longitude"}}]},
                 "coordinate_leak",
-                "Coordinate privacy: Failed",
+                "❌ FAIL: Location coordinates were exposed",
             ),
             (
                 {"locations": [], "metadata": {"Error": "synthetic"}},
                 "application_error_field",
-                "Coordinate privacy: Passed",
+                "❌ FAIL: Saved-location privacy contract failed",
             ),
             (
                 {"locations": [], "metadata": {"DETAIL": "synthetic"}},
                 "application_error_field",
-                "Coordinate privacy: Passed",
+                "❌ FAIL: Saved-location privacy contract failed",
             ),
         )
-        for payload, expected_category, expected_privacy in scenarios:
+        for payload, expected_category, expected_failure in scenarios:
             with self.subTest(expected_category=expected_category, payload=payload):
                 result = self.collect(payload)
                 rendered = "\n".join(result.section.lines)
@@ -295,7 +302,8 @@ class LocationHealthTests(unittest.TestCase):
                     f"Saved-location failure category: {expected_category}",
                     rendered,
                 )
-                self.assertIn(expected_privacy, rendered)
+                self.assertIn(expected_failure, rendered)
+                self.assertNotIn("Coordinate privacy:", rendered)
                 self.assertNotIn("synthetic-latitude", rendered)
                 self.assertNotIn("synthetic-longitude", rendered)
 
@@ -402,10 +410,18 @@ class WeatherHealthTests(unittest.TestCase):
         self.assertEqual(fresh.severity, "PASS")
         self.assertIn("Forecast freshness: Fresh", fresh.section.lines)
         self.assertIn("Forecast days available: 2", fresh.section.lines)
+        self.assertNotIn(
+            "Response privacy contract: Passed",
+            "\n".join(fresh.section.lines),
+        )
         self.assertEqual(stale.severity, "WARN")
         self.assertEqual(
             stale.dashboard_line,
             "⚠ WARN: Weather API is serving stale cached data",
+        )
+        self.assertNotIn(
+            "Response privacy contract: Passed",
+            "\n".join(stale.section.lines),
         )
 
     def test_two_temporary_failures_then_success_use_bounded_delays(self):
@@ -521,6 +537,21 @@ class WeatherHealthTests(unittest.TestCase):
                     f"Failure category: {expected_category}",
                     result.section.lines,
                 )
+                if expected_category == "coordinate_leak":
+                    self.assertIn(
+                        "❌ FAIL: Weather location coordinates were exposed",
+                        result.section.lines,
+                    )
+                elif expected_category == "raw_provider_field":
+                    self.assertIn(
+                        "❌ FAIL: Raw weather-provider data was exposed",
+                        result.section.lines,
+                    )
+                elif expected_category == "application_error_field":
+                    self.assertIn(
+                        "❌ FAIL: Weather response privacy contract failed",
+                        result.section.lines,
+                    )
                 opener.assert_called_once()
                 sleep.assert_not_called()
 
@@ -1022,7 +1053,7 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
             SimpleNamespace(
                 key="harrisnas_mount_missing",
                 healthy=True,
-                summary="HarrisNAS backup mount is available (nfs, nas)",
+                summary="HarrisNAS backup mount is available (nfs4, 192.0.2.10:/synthetic/export)",
             ),
         ]
 
@@ -1120,18 +1151,32 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
             False,
             True,
         )
-        exit_code, body, send_alert = self.run_main(maintenance)
+        health_results = self.platform_results()
+        nas_result = health_results[-1]
+        original_nas_summary = nas_result.summary
+        exit_code, body, send_alert = self.run_main(
+            maintenance,
+            health_results=health_results,
+        )
         self.assertEqual(exit_code, 0)
         self.assertIn("Overall: HEALTHY", body)
         runner_check = "✅ PASS: Container training-runner is running"
         os_check = "✅ PASS: OS maintenance is current"
-        backup_check = "✅ PASS: HarrisNAS backup mount is available (nfs, nas)"
+        backup_check = "✅ PASS: HarrisNAS backup mount is available"
         location_check = "✅ PASS: Location services are healthy"
         weather_check = "✅ PASS: Weather API is healthy"
         self.assertLess(body.index(runner_check), body.index(os_check))
         self.assertLess(body.index(os_check), body.index(location_check))
         self.assertLess(body.index(location_check), body.index(weather_check))
         self.assertLess(body.index(weather_check), body.index(backup_check))
+        self.assertEqual(
+            original_nas_summary,
+            "HarrisNAS backup mount is available (nfs4, 192.0.2.10:/synthetic/export)",
+        )
+        self.assertEqual(nas_result.summary, original_nas_summary)
+        self.assertNotIn("nfs4", body)
+        self.assertNotIn("192.0.2.10", body)
+        self.assertNotIn("/synthetic/export", body)
         self.assertEqual(body.count("\nOS maintenance\n"), 1)
         self.assertIn("- OS release: Ubuntu 24.04.3 LTS", body)
         detailed_section = body.index("\nOS maintenance\n")
@@ -1149,6 +1194,29 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
             body.index("\nWeather API health\n"),
             body.index("\nHealth-data freshness\n"),
         )
+        send_alert.assert_not_called()
+
+    def test_failed_nas_dashboard_wording_remains_actionable(self):
+        maintenance = report.OSMaintenanceResult(
+            report.SummarySection("OS maintenance", ["Security updates: 0"]),
+            False,
+            True,
+        )
+        health_results = self.platform_results()
+        health_results[-1].healthy = False
+        health_results[-1].summary = (
+            "HarrisNAS backup directory is not backed by NFS: /mnt/synthetic"
+        )
+        exit_code, body, send_alert = self.run_main(
+            maintenance,
+            health_results=health_results,
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertIn(
+            "❌ FAIL: HarrisNAS backup directory is not backed by NFS: /mnt/synthetic",
+            body,
+        )
+        self.assertIn("Overall: ATTENTION NEEDED", body)
         send_alert.assert_not_called()
 
     def test_any_location_or_weather_warning_or_failure_requires_attention(self):
