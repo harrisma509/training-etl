@@ -756,6 +756,8 @@ def _platform_check_dashboard_line(result: Any) -> str:
         return "✅ PASS: HarrisNAS backup mount is available"
     if result.key == "nut_monitor_inactive" and result.healthy:
         return "✅ PASS: UPS power monitoring is active"
+    if result.key == "sync_request_stuck" and result.healthy:
+        return "✅ PASS: No stale sync requests"
     if result.key == "backup_stale" and result.healthy:
         match = re.fullmatch(
             r"Latest backup .+ is (\d+(?:\.\d+)?) hours old",

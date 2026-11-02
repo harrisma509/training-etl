@@ -1068,7 +1068,10 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
     ):
         sections = {
             "postgresql": report.SummarySection("PostgreSQL", ["Online"]),
-            "sync": report.SummarySection("Synchronization", ["No issues"]),
+            "sync": report.SummarySection(
+                "Synchronization",
+                ["Sync requests stuck over 30 minutes: 0"],
+            ),
             "freshness": report.SummarySection("Health-data freshness", ["Fresh"]),
             "backup": report.SummarySection("Backups and recovery", ["Present"]),
         }
@@ -1169,6 +1172,14 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
         )
         health_results.append(ups_result)
         original_ups_summary = ups_result.summary
+        stale_sync_result = SimpleNamespace(
+            key="sync_request_stuck",
+            healthy=True,
+            severity="error",
+            summary="No stale pending or running sync requests",
+        )
+        health_results.append(stale_sync_result)
+        original_stale_sync_summary = stale_sync_result.summary
         exit_code, body, send_alert = self.run_main(
             maintenance,
             health_results=health_results,
@@ -1180,6 +1191,7 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
         backup_check = "✅ PASS: HarrisNAS backup mount is available"
         latest_backup_check = "✅ PASS: Latest backup is 13.7 hours old"
         ups_check = "✅ PASS: UPS power monitoring is active"
+        sync_dashboard_check = "✅ PASS: No stale sync requests"
         location_check = "✅ PASS: Location services are healthy"
         weather_check = "✅ PASS: Weather API is healthy"
         self.assertLess(body.index(runner_check), body.index(os_check))
@@ -1188,6 +1200,7 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
         self.assertLess(body.index(weather_check), body.index(backup_check))
         self.assertLess(body.index(backup_check), body.index(latest_backup_check))
         self.assertLess(body.index(latest_backup_check), body.index(ups_check))
+        self.assertLess(body.index(ups_check), body.index(sync_dashboard_check))
         self.assertEqual(
             original_nas_summary,
             "HarrisNAS backup mount is available (nfs4, 192.0.2.10:/synthetic/export)",
@@ -1201,6 +1214,17 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
         self.assertEqual(ups_result.key, "nut_monitor_inactive")
         self.assertEqual(ups_result.severity, "error")
         self.assertEqual(ups_result.summary, original_ups_summary)
+        self.assertIn(sync_dashboard_check, body)
+        self.assertNotIn("No stale pending or running sync requests", body)
+        self.assertEqual(stale_sync_result.key, "sync_request_stuck")
+        self.assertEqual(stale_sync_result.severity, "error")
+        self.assertEqual(stale_sync_result.summary, original_stale_sync_summary)
+        sync_section = body.index("\nSynchronization\n")
+        sync_detail = "Sync requests stuck over 30 minutes: 0"
+        self.assertIn(sync_detail, body)
+        self.assertLess(body.index(sync_dashboard_check), sync_section)
+        self.assertLess(sync_section, body.index(sync_detail))
+        self.assertLess(body.index(sync_detail), body.index("\nLocation and Geoapify health\n"))
         self.assertNotIn("nfs4", body)
         self.assertNotIn("192.0.2.10", body)
         self.assertNotIn("/synthetic/export", body)
@@ -1317,6 +1341,39 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
         self.assertEqual(
             ups_result.summary,
             "Systemd service nut-monitor.service is not active",
+        )
+        send_alert.assert_not_called()
+
+    def test_stale_sync_requests_remain_actionable_and_require_attention(self):
+        maintenance = report.OSMaintenanceResult(
+            report.SummarySection("OS maintenance", ["Security updates: 0"]),
+            False,
+            True,
+        )
+        stale_sync_result = SimpleNamespace(
+            key="sync_request_stuck",
+            healthy=False,
+            severity="error",
+            summary="Found 2 sync request(s) stuck for more than 30 minutes",
+        )
+        health_results = self.platform_results()
+        health_results.append(stale_sync_result)
+
+        exit_code, body, send_alert = self.run_main(
+            maintenance,
+            health_results=health_results,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn(
+            "❌ FAIL: Found 2 sync request(s) stuck for more than 30 minutes",
+            body,
+        )
+        self.assertIn("Overall: ATTENTION NEEDED", body)
+        self.assertEqual(stale_sync_result.key, "sync_request_stuck")
+        self.assertEqual(
+            stale_sync_result.summary,
+            "Found 2 sync request(s) stuck for more than 30 minutes",
         )
         send_alert.assert_not_called()
 
