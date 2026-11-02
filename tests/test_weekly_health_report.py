@@ -1161,6 +1161,14 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
         )
         health_results.append(backup_result)
         original_backup_summary = backup_result.summary
+        ups_result = SimpleNamespace(
+            key="nut_monitor_inactive",
+            healthy=True,
+            severity="error",
+            summary="Systemd service nut-monitor.service is active",
+        )
+        health_results.append(ups_result)
+        original_ups_summary = ups_result.summary
         exit_code, body, send_alert = self.run_main(
             maintenance,
             health_results=health_results,
@@ -1171,6 +1179,7 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
         os_check = "✅ PASS: OS maintenance is current"
         backup_check = "✅ PASS: HarrisNAS backup mount is available"
         latest_backup_check = "✅ PASS: Latest backup is 13.7 hours old"
+        ups_check = "✅ PASS: UPS power monitoring is active"
         location_check = "✅ PASS: Location services are healthy"
         weather_check = "✅ PASS: Weather API is healthy"
         self.assertLess(body.index(runner_check), body.index(os_check))
@@ -1178,6 +1187,7 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
         self.assertLess(body.index(location_check), body.index(weather_check))
         self.assertLess(body.index(weather_check), body.index(backup_check))
         self.assertLess(body.index(backup_check), body.index(latest_backup_check))
+        self.assertLess(body.index(latest_backup_check), body.index(ups_check))
         self.assertEqual(
             original_nas_summary,
             "HarrisNAS backup mount is available (nfs4, 192.0.2.10:/synthetic/export)",
@@ -1186,6 +1196,11 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
         self.assertIn(latest_backup_check, body)
         self.assertNotIn("pg_training_20261101_020001.sql.gz", body)
         self.assertEqual(backup_result.summary, original_backup_summary)
+        self.assertIn(ups_check, body)
+        self.assertNotIn("Systemd service nut-monitor.service is active", body)
+        self.assertEqual(ups_result.key, "nut_monitor_inactive")
+        self.assertEqual(ups_result.severity, "error")
+        self.assertEqual(ups_result.summary, original_ups_summary)
         self.assertNotIn("nfs4", body)
         self.assertNotIn("192.0.2.10", body)
         self.assertNotIn("/synthetic/export", body)
@@ -1270,6 +1285,39 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
             body,
         )
         self.assertIn("Overall: ATTENTION NEEDED", body)
+        send_alert.assert_not_called()
+
+    def test_inactive_ups_service_remains_actionable_and_requires_attention(self):
+        maintenance = report.OSMaintenanceResult(
+            report.SummarySection("OS maintenance", ["Security updates: 0"]),
+            False,
+            True,
+        )
+        ups_result = SimpleNamespace(
+            key="nut_monitor_inactive",
+            healthy=False,
+            severity="error",
+            summary="Systemd service nut-monitor.service is not active",
+        )
+        health_results = self.platform_results()
+        health_results.append(ups_result)
+
+        exit_code, body, send_alert = self.run_main(
+            maintenance,
+            health_results=health_results,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn(
+            "❌ FAIL: Systemd service nut-monitor.service is not active",
+            body,
+        )
+        self.assertIn("Overall: ATTENTION NEEDED", body)
+        self.assertEqual(ups_result.key, "nut_monitor_inactive")
+        self.assertEqual(
+            ups_result.summary,
+            "Systemd service nut-monitor.service is not active",
+        )
         send_alert.assert_not_called()
 
     def test_failed_nas_dashboard_wording_remains_actionable(self):

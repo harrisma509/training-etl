@@ -289,40 +289,67 @@ A healthy result exits with status `0`. One or more failed checks exit with stat
 
 ### Weekly health summary
 
-`weekly_health_report.py` sends one Sunday operational summary and supports a no-email preview:
+`weekly_health_report.py` is a standalone root-cron program deployed at
+`/opt/training/etl/weekly_health_report.py`. It sends one Sunday operational
+summary and supports a no-email preview:
 
 ```bash
 sudo /opt/training/etl/weekly_health_report.py --dry-run
 sudo /opt/training/etl/weekly_health_report.py
 ```
 
-The report includes:
+The report includes an overall `HEALTHY` or `ATTENTION NEEDED` status. The dry
+run prints the report and sends no email. Subjects remain exactly:
 
-- overall `HEALTHY` or `ATTENTION NEEDED` status
-- platform-health checks and OS maintenance status (`✅ PASS`, `⚠ ATTENTION`, or `❌ FAIL`); detailed OS values remain below
-- saved-location and Geoapify availability, with coordinate privacy status
-- normalized Weather API freshness and available forecast-day count
-- PostgreSQL version and database size
-- Activities, Daily, and Weekly row counts
-- successful and non-OK sync runs during the last seven days
-- latest successful sync and warning count
-- stuck sync-request count
-- freshness of Steps, Weight, Sleep, HRV, resting heart rate, and VO2 max
-- newest backup name, age, size, and retained backup count
-- latest recorded restore-validation result
-- active incidents from `alert_state.json`
-- OS release, running kernel, upgradeable package count, security-update count,
-  firmware update targets and urgency, firmware post-install reboot/shutdown
-  requirements, and the operating-system reboot-required state
+- `Harris Server Weekly Health: Healthy`
+- `Harris Server Weekly Health: Attention Needed`
+
+The report starts with a Platform health dashboard covering PostgreSQL
+availability; `training-web` and `training-runner` status; OS maintenance;
+Location and Weather health; HarrisNAS mount and latest-backup age; root
+filesystem usage; UPS power monitoring; automatic-sync freshness; and stale
+pending/running sync requests. The healthy latest-backup dashboard line omits
+the filename. A healthy UPS line reports
+`✅ PASS: UPS power monitoring is active`; this reflects the
+`nut-monitor.service` status, not UPS telemetry, battery condition, or an
+end-to-end power-failure test.
+
+Detailed sections follow for OS maintenance, PostgreSQL and training data,
+Synchronization, Location and Geoapify health, Weather API health,
+Health-data freshness, Backups and recovery, and Active incidents. They cover:
+
+- OS release and running kernel; upgradeable and security-update counts;
+  pending firmware updates with urgency and post-install reboot/shutdown
+  requirements; and the operating-system reboot-required state
+- PostgreSQL version and database size; Activities, Daily, and Weekly row
+  counts; successful and non-OK sync runs in the last seven days; latest
+  successful sync and warning count; and stuck sync-request count
+- Geoapify and saved-location API availability and saved-location count
+- Weather API availability, forecast freshness, and available forecast days
+- Freshness of Steps, Weight, Sleep, HRV, resting heart rate, and VO2 max
+- Latest backup filename, age, size, retained count, and recorded
+  restore-validation result
+- Active incidents from `alert_state.json`
+
+PASS checks keep the report healthy. Successful coordinate-privacy and Weather
+provider-neutrality checks remain active but are not displayed. Their failures
+are explicit and produce `ATTENTION NEEDED`. Stale but usable Weather data is
+WARN; Location or Weather WARN/FAIL results require attention.
 
 Security updates, pending firmware updates, or a required operating-system
-reboot set the overall status to `ATTENTION NEEDED`; ordinary non-security
-upgrades are informational. Package status uses the server's existing APT
-metadata and a simulated upgrade only. Firmware status uses
-`fwupdmgr get-updates --json`. The report does not install updates or reboot
-the server.
+reboot require attention; ordinary non-security upgrades are informational.
+Missing or unclassifiable critical maintenance status fails closed. Package
+status uses the server's existing APT metadata and a simulated upgrade only.
+Firmware status uses `fwupdmgr get-updates --json`. The report does not install
+updates or reboot the server.
 
-The weekly report observes current health but does not open or recover incidents. The hourly health checker owns incident lifecycle.
+For saved-location and Weather health, the report calls the published
+`training-web` APIs directly on localhost; it does not route these checks
+through `training-api:8090`. The constrained Geoapify probe runs inside the
+`training-web` container so its API key stays there.
+
+The weekly report observes current health but does not open or recover
+incidents. The hourly health checker owns incident lifecycle.
 
 ### Production schedules
 

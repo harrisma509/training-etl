@@ -754,6 +754,8 @@ def collect_platform_section(
 def _platform_check_dashboard_line(result: Any) -> str:
     if result.key == "harrisnas_mount_missing" and result.healthy:
         return "✅ PASS: HarrisNAS backup mount is available"
+    if result.key == "nut_monitor_inactive" and result.healthy:
+        return "✅ PASS: UPS power monitoring is active"
     if result.key == "backup_stale" and result.healthy:
         match = re.fullmatch(
             r"Latest backup .+ is (\d+(?:\.\d+)?) hours old",
