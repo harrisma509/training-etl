@@ -754,6 +754,14 @@ def collect_platform_section(
 def _platform_check_dashboard_line(result: Any) -> str:
     if result.key == "harrisnas_mount_missing" and result.healthy:
         return "✅ PASS: HarrisNAS backup mount is available"
+    if result.key == "backup_stale" and result.healthy:
+        match = re.fullmatch(
+            r"Latest backup .+ is (\d+(?:\.\d+)?) hours old",
+            result.summary,
+        )
+        if match is not None:
+            return f"✅ PASS: Latest backup is {match.group(1)} hours old"
+        return "✅ PASS: Latest backup is available"
     return f"{'✅ PASS' if result.healthy else '❌ FAIL'}: {result.summary}"
 
 

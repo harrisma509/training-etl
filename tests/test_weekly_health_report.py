@@ -1154,6 +1154,13 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
         health_results = self.platform_results()
         nas_result = health_results[-1]
         original_nas_summary = nas_result.summary
+        backup_result = SimpleNamespace(
+            key="backup_stale",
+            healthy=True,
+            summary="Latest backup pg_training_20261101_020001.sql.gz is 13.7 hours old",
+        )
+        health_results.append(backup_result)
+        original_backup_summary = backup_result.summary
         exit_code, body, send_alert = self.run_main(
             maintenance,
             health_results=health_results,
@@ -1163,17 +1170,22 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
         runner_check = "✅ PASS: Container training-runner is running"
         os_check = "✅ PASS: OS maintenance is current"
         backup_check = "✅ PASS: HarrisNAS backup mount is available"
+        latest_backup_check = "✅ PASS: Latest backup is 13.7 hours old"
         location_check = "✅ PASS: Location services are healthy"
         weather_check = "✅ PASS: Weather API is healthy"
         self.assertLess(body.index(runner_check), body.index(os_check))
         self.assertLess(body.index(os_check), body.index(location_check))
         self.assertLess(body.index(location_check), body.index(weather_check))
         self.assertLess(body.index(weather_check), body.index(backup_check))
+        self.assertLess(body.index(backup_check), body.index(latest_backup_check))
         self.assertEqual(
             original_nas_summary,
             "HarrisNAS backup mount is available (nfs4, 192.0.2.10:/synthetic/export)",
         )
         self.assertEqual(nas_result.summary, original_nas_summary)
+        self.assertIn(latest_backup_check, body)
+        self.assertNotIn("pg_training_20261101_020001.sql.gz", body)
+        self.assertEqual(backup_result.summary, original_backup_summary)
         self.assertNotIn("nfs4", body)
         self.assertNotIn("192.0.2.10", body)
         self.assertNotIn("/synthetic/export", body)
@@ -1194,6 +1206,70 @@ class WeeklyReportIntegrationTests(unittest.TestCase):
             body.index("\nWeather API health\n"),
             body.index("\nHealth-data freshness\n"),
         )
+        send_alert.assert_not_called()
+
+    def test_backup_detail_section_retains_filename_and_diagnostics(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backup_dir = Path(temp_dir) / "backups"
+            backup_dir.mkdir()
+            restore_log = Path(temp_dir) / "restore.log"
+            now = report.datetime.now(report.timezone.utc).timestamp()
+
+            for index in range(14):
+                older_backup = backup_dir / f"pg_training_older_{index}.sql.gz"
+                older_backup.touch()
+                old_timestamp = now - (15 + index) * 3600
+                os.utime(older_backup, (old_timestamp, old_timestamp))
+
+            latest_backup = backup_dir / "pg_training_20261101_020001.sql.gz"
+            latest_backup.touch()
+            with latest_backup.open("wb") as backup_file:
+                backup_file.truncate(1671 * 1024)
+            latest_timestamp = now - 13.7 * 3600
+            os.utime(latest_backup, (latest_timestamp, latest_timestamp))
+            restore_log.write_text(
+                "SUCCESS: Backup restored and validated.\n",
+                encoding="utf-8",
+            )
+
+            section = report.collect_backup_section(backup_dir, restore_log)
+
+        self.assertEqual(
+            section.lines,
+            [
+                "Latest backup: pg_training_20261101_020001.sql.gz",
+                "Backup age: 13.7 hours",
+                "Backup size: 1671 KB",
+                "Backups retained: 15",
+                "Latest recorded restore validation: PASSED",
+            ],
+        )
+
+    def test_missing_backup_failure_wording_remains_actionable(self):
+        maintenance = report.OSMaintenanceResult(
+            report.SummarySection("OS maintenance", ["Security updates: 0"]),
+            False,
+            True,
+        )
+        backup_result = SimpleNamespace(
+            key="backup_stale",
+            healthy=False,
+            summary="No PostgreSQL backup files were found in /mnt/synthetic/backups",
+        )
+        health_results = self.platform_results()
+        health_results.append(backup_result)
+
+        exit_code, body, send_alert = self.run_main(
+            maintenance,
+            health_results=health_results,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn(
+            "❌ FAIL: No PostgreSQL backup files were found in /mnt/synthetic/backups",
+            body,
+        )
+        self.assertIn("Overall: ATTENTION NEEDED", body)
         send_alert.assert_not_called()
 
     def test_failed_nas_dashboard_wording_remains_actionable(self):
